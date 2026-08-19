@@ -48,7 +48,7 @@ prompt_embedding_cache = {}
 from modules.video_queue import VideoJobQueue, JobStatus
 from modules.prompt_handler import parse_timestamped_prompt
 from modules.interface import create_interface, format_queue_status
-from modules.settings import Settings
+from modules.settings import Settings, resolve_ssl_config
 from modules import DUMMY_LORA_NAME # Import the constant
 from modules.pipelines.metadata_utils import create_metadata
 from modules.pipelines.worker import worker
@@ -115,6 +115,10 @@ parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
 parser.add_argument("--lora", type=str, default=None, help="Lora path (comma separated for multiple)")
 parser.add_argument("--offline", action='store_true', help="Run in offline mode")
+parser.add_argument("--ssl-certfile", type=str, default=None, help="Path to an SSL certificate file, to serve the UI over HTTPS (overrides settings)")
+parser.add_argument("--ssl-keyfile", type=str, default=None, help="Path to the SSL private key matching --ssl-certfile (overrides settings)")
+parser.add_argument("--ssl-keyfile-password", type=str, default=None, help="Password for the SSL key file, if it is encrypted")
+parser.add_argument("--ssl-verify", action='store_true', help="Verify the certificate on startup. Leave off for self-signed certificates")
 args = parser.parse_args()
 
 print(args)
@@ -695,6 +699,22 @@ interface = create_interface(
     lora_names=lora_names # Explicitly pass the found LoRA names
 )
 
+# Resolve HTTPS configuration. Empty dict means plain HTTP.
+ssl_kwargs = resolve_ssl_config(
+    settings,
+    certfile=args.ssl_certfile,
+    keyfile=args.ssl_keyfile,
+    keyfile_password=args.ssl_keyfile_password,
+    ssl_verify=True if args.ssl_verify else None,
+)
+
+if ssl_kwargs:
+    print(f"HTTPS enabled using certificate: {ssl_kwargs['ssl_certfile']}")
+    if args.share:
+        print("Note: a --share link makes its own TLS connection to this process; combining it with local HTTPS may break the share link.")
+else:
+    print("HTTPS not configured - serving over plain HTTP.")
+
 # Launch the interface
 interface.launch(
     server_name=args.server,
@@ -702,4 +722,5 @@ interface.launch(
     share=args.share,
     inbrowser=args.inbrowser,
     allowed_paths=[settings.get("output_dir"), settings.get("metadata_dir")],
+    **ssl_kwargs,
 )

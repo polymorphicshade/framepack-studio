@@ -37,6 +37,48 @@ For information on installation, configuration, and usage, please visit our [doc
 
 Please see [this guide](https://docs.framepackstudio.com/docs/get_started/) on our documentation site to get FP-Studio installed.
 
+## HTTPS
+
+The UI is served over plain HTTP by default. There are two ways to put it behind TLS.
+
+### Direct HTTPS
+
+Give the app a certificate and key and it serves HTTPS itself, no reverse proxy involved. Either pass them on the command line:
+
+```bash
+python studio.py --ssl-certfile certs/fullchain.pem --ssl-keyfile certs/privkey.pem
+```
+
+or set **SSL Certificate File** and **SSL Key File** in the Settings tab (stored as `ssl_certfile` / `ssl_keyfile` in `.framepack/settings.json`) and restart. Command line values win over the saved settings. Both a certificate and a key are required; if either is missing or the file does not exist, the app prints why and falls back to HTTP rather than refusing to start.
+
+To mint a self-signed certificate for local use:
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
+  -keyout certs/privkey.pem -out certs/fullchain.pem \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+In Git Bash, prefix the command with `MSYS2_ARG_CONV_EXCL="*"` — it rewrites `/CN=localhost` into a Windows path otherwise. PowerShell and cmd need no such prefix.
+
+Add every address you will actually type in the browser to `subjectAltName` — including the machine's LAN address, e.g. `IP:192.168.1.99` — or the browser will warn on every visit. Browsers warn once for a self-signed certificate regardless, until you accept it.
+
+Certificate verification on startup is off by default (`ssl_verify` in the settings file), because self-signed certificates fail it. Pass `--ssl-verify` when you are using a CA-issued certificate and want it checked.
+
+### Docker with an nginx front end
+
+`docker-compose.https.yml` runs the same stack as `docker-compose.yml` plus an nginx sidecar that terminates TLS:
+
+```bash
+docker compose -f docker-compose.https.yml up -d
+```
+
+The UI is then at `https://localhost:8443`. A self-signed certificate is generated into `./certs` on first boot; drop a real `fullchain.pem` / `privkey.pem` in there to use a CA-issued one instead.
+
+HTTPS is port 8443, not 7860 — in this stack 7860 is the app's own plain HTTP listener, published on `127.0.0.1` only, and nothing there speaks TLS. Copy `.env.https.example` to `.env` to change either port, or to put the host's LAN address in the certificate before first boot.
+
 ## Contributing 
 
 We would love your help building FramePack Studio! To make collaboration effective, please adhere to the following:

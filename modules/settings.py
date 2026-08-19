@@ -30,6 +30,10 @@ class Settings:
             "system_prompt_template": "{\"template\": \"<|start_header_id|>system<|end_header_id|>\\n\\nDescribe the video by detailing the following aspects: 1. The main content and theme of the video.2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects.3. Actions, events, behaviors temporal relationships, physical movement changes of the objects.4. background environment, light, style and atmosphere.5. camera angles, movements, and transitions used in the video:<|eot_id|><|start_header_id|>user<|end_header_id|>\\n\\n{}<|eot_id|>\", \"crop_start\": 95}",
             "startup_model_type": "None",
             "startup_preset_name": None,
+            "ssl_certfile": None,  # Path to an SSL certificate file for HTTPS. None = HTTP only.
+            "ssl_keyfile": None,   # Path to the matching SSL private key. Both are required for HTTPS.
+            "ssl_keyfile_password": None,  # Password for the key file, if it is encrypted.
+            "ssl_verify": False,   # Gradio verifies the cert on startup; self-signed certs need this off.
             "enhancer_prompt_template": """You are a creative assistant for a text-to-video generator. Your task is to take a user's prompt and make it more descriptive, vivid, and detailed. Focus on visual elements. Do not change the core action, but embellish it.
 
 User prompt: "{text_to_enhance}"
@@ -86,3 +90,52 @@ Enhanced prompt:"""
         self.settings.update(settings)
         if self.settings.get("auto_save_settings", True):
             self.save_settings()
+
+
+def resolve_ssl_config(
+    settings: "Settings",
+    certfile: Optional[str] = None,
+    keyfile: Optional[str] = None,
+    keyfile_password: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Returns the SSL kwargs for Gradio's launch() when HTTPS is configured.
+
+    Command line values win over the saved settings. Returns an empty dict when
+    HTTPS is not configured or the files are missing, so the app falls back to
+    plain HTTP instead of refusing to start.
+    """
+    certfile = certfile or settings.get("ssl_certfile")
+    keyfile = keyfile or settings.get("ssl_keyfile")
+
+    if not certfile and not keyfile:
+        return {}
+
+    if not certfile or not keyfile:
+        print("SSL: both a certificate and a key are required - falling back to HTTP")
+        return {}
+
+    certpath = Path(str(certfile)).expanduser()
+    keypath = Path(str(keyfile)).expanduser()
+
+    if not certpath.is_file():
+        print(f"SSL: certificate file not found: {certpath} - falling back to HTTP")
+        return {}
+    if not keypath.is_file():
+        print(f"SSL: key file not found: {keypath} - falling back to HTTP")
+        return {}
+
+    if ssl_verify is None:
+        ssl_verify = bool(settings.get("ssl_verify", False))
+    if keyfile_password is None:
+        keyfile_password = settings.get("ssl_keyfile_password") or None
+
+    ssl_kwargs: Dict[str, Any] = {
+        "ssl_certfile": str(certpath),
+        "ssl_keyfile": str(keypath),
+        "ssl_verify": ssl_verify,
+    }
+    if keyfile_password:
+        ssl_kwargs["ssl_keyfile_password"] = keyfile_password
+
+    return ssl_kwargs

@@ -10,7 +10,7 @@ if %errorlevel% neq 0 (
 
 if exist "%cd%/venv/Scripts/python.exe" (
 
-"%cd%/venv/Scripts/python.exe" studio.py
+"%cd%/venv/Scripts/python.exe" studio.py %*
 
 ) else (
 

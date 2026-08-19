@@ -1,0 +1,76 @@
+# Same stack as docker-compose.yml, with an nginx sidecar terminating HTTPS.
+#
+#   docker compose -f docker-compose.https.yml up -d
+#   https://localhost:8443
+#
+# HTTPS is port 8443, not 7860. 7860 is the app's own plain HTTP listener and is
+# published on 127.0.0.1 only; pointing a browser at https://<host>:7860 gets
+# you "SSL_ERROR_RX_RECORD_TOO_LONG", because nothing there speaks TLS.
+#
+# Copy .env.https.example to .env to change ports, or to put the host's LAN
+# address in the certificate before first boot.
+#
+# The certificate is self-signed and generated into ./certs on first boot, so
+# the browser will warn once until you accept it (or drop a real
+# fullchain.pem / privkey.pem into ./certs).
+services:
+  studio:
+    build:
+      context: .
+      # modify this if you are building the image locally and need a different CUDA version
+      args:
+        - CUDA_VERSION=12.4.1
+    # modify the tag here if you need a different CUDA version or branch
+    image: colinurbs/fp-studio:cuda12.4-latest-develop
+    restart: unless-stopped
+    # Bound to loopback only - nginx is the way in from anywhere else. Drop the
+    # 127.0.0.1 prefix if you want plain HTTP on the LAN as well.
+    ports:
+      - "127.0.0.1:${PORT:-7860}:7860"
+    volumes:
+      - "./loras:/app/loras"
+      - "./outputs:/app/outputs"
+      - "./.framepack:/app/.framepack"
+      - "./modules/toolbox/model_esrgan:/app/modules/toolbox/model_esrgan"
+      - "./modules/toolbox/model_rife:/app/modules/toolbox/model_rife"
+      - "$HOME/.cache/huggingface:/app/hf_download"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # TLS front end. Terminates HTTPS and proxies to the studio over the internal
+  # compose network, so the app itself never speaks TLS.
+  nginx:
+    build:
+      context: ./docker/nginx
+    image: framepack-studio-nginx:local
+    restart: unless-stopped
+
+    # Start order only, not readiness: nginx returning 502 for the first minute
+    # while the models load is better than nginx refusing to start.
+    depends_on:
+      - studio
+
+    ports:
+      - "${HTTPS_PORT:-8443}:443"
+
+    volumes:
+      - ${NGINX_CONF:-./docker/nginx/nginx.conf}:/etc/nginx/conf.d/default.conf:ro
+      # Self-signed cert is generated here on first boot. Drop real fullchain.pem
+      # / privkey.pem in to use a CA-issued one instead.
+      - ./certs:/etc/nginx/certs
+
+    environment:
+      TLS_COMMON_NAME: "${TLS_COMMON_NAME:-localhost}"
+      TLS_SAN: "${TLS_SAN:-DNS:localhost,IP:127.0.0.1}"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSk https://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s

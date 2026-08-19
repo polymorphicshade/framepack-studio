@@ -1048,12 +1048,24 @@ def create_interface(
                             value=settings.get("gradio_theme", "default"),
                             info="Select the Gradio UI theme. Requires restart."
                         )
+                        gr.Markdown("### HTTPS")
+                        gr.Markdown("Leave both boxes empty to serve plain HTTP. Changes require a restart.")
+                        ssl_certfile = gr.Textbox(
+                            label="SSL Certificate File",
+                            value=settings.get("ssl_certfile") or "",
+                            placeholder="Path to a .pem/.crt certificate (e.g. certs/fullchain.pem)"
+                        )
+                        ssl_keyfile = gr.Textbox(
+                            label="SSL Key File",
+                            value=settings.get("ssl_keyfile") or "",
+                            placeholder="Path to the matching private key (e.g. certs/privkey.pem)"
+                        )
                         save_btn = gr.Button("💾 Save Settings")
                         cleanup_btn = gr.Button("🗑️ Clean Up Temporary Files")
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1082,7 +1094,9 @@ def create_interface(
                                     auto_save_settings=auto_save,
                                     gradio_theme=selected_theme,
                                     startup_model_type=startup_model_type_val,
-                                    startup_preset_name=startup_preset_name_val
+                                    startup_preset_name=startup_preset_name_val,
+                                    ssl_certfile=ssl_certfile_val or None,
+                                    ssl_keyfile=ssl_keyfile_val or None
                                 )
                                 # settings.save_settings() is called inside settings.save_settings if auto_save is true,
                                 # but for the manual button, we ensure it saves regardless of the auto_save flag's previous state.
@@ -1119,7 +1133,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1194,6 +1208,8 @@ def create_interface(
                         metadata_dir.blur(lambda v: handle_individual_setting_change("metadata_dir", v, "Metadata Directory"), inputs=[metadata_dir], outputs=[status])
                         lora_dir.blur(lambda v: handle_individual_setting_change("lora_dir", v, "LoRA Directory"), inputs=[lora_dir], outputs=[status])
                         gradio_temp_dir.blur(lambda v: handle_individual_setting_change("gradio_temp_dir", v, "Gradio Temporary Directory"), inputs=[gradio_temp_dir], outputs=[status])
+                        ssl_certfile.blur(lambda v: handle_individual_setting_change("ssl_certfile", v or None, "SSL Certificate File"), inputs=[ssl_certfile], outputs=[status])
+                        ssl_keyfile.blur(lambda v: handle_individual_setting_change("ssl_keyfile", v or None, "SSL Key File"), inputs=[ssl_keyfile], outputs=[status])
                         
                         auto_save.change(lambda v: handle_individual_setting_change("auto_save_settings", v, "Auto-save Settings"), inputs=[auto_save], outputs=[status])
                         theme_dropdown.change(lambda v: handle_individual_setting_change("gradio_theme", v, "Theme"), inputs=[theme_dropdown], outputs=[status])
