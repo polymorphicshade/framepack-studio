@@ -326,6 +326,14 @@ def create_interface(
         min-height: 300px !important;
         object-fit: contain;
     }
+    /* The finished-frames preview is a fixed-height box, but the <video> keeps
+       its own aspect ratio and spills out of it - over the buttons underneath -
+       whenever the clip is taller than the box. Letterbox it inside instead. */
+    #result-video video {
+        max-height: 100%;
+        width: 100%;
+        object-fit: contain;
+    }
     /* NEW: Closes the gap between input tabs and the pipeline accordion below them */
     #pipeline-controls-wrapper {
         margin-top: -15px !important; /* Adjust this value to get the perfect "snug" fit */
@@ -686,7 +694,18 @@ def create_interface(
                             elem_classes="contain-image",
                             image_mode="RGB"
                         )
-                        result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=256, loop=True)
+                        result_video = gr.Video(
+                            label="Finished Frames",
+                            autoplay=True,
+                            show_share_button=False,
+                            # Gradio leaves this as None, which reaches the frontend as
+                            # null and reads as false, so the download icon never
+                            # appears unless it is asked for explicitly.
+                            show_download_button=True,
+                            height=256,
+                            loop=True,
+                            elem_id="result-video"
+                        )
                         # Holds the PNG extracted from whatever video is currently shown,
                         # so both buttons below work off one extraction.
                         last_frame_path_state = gr.State(None)
