@@ -314,8 +314,80 @@ def get_cached_or_encode_prompt(prompt, text_encoder, text_encoder_2, tokenizer,
         # Return embeddings already on the target device (as encode_prompt_conds uses the model's device)
         return llama_vec, llama_attention_mask, clip_l_pooler
 
+def unload_all_models_from_gpu():
+    """Move every model back to system RAM and return the VRAM to the driver.
+
+    Called by the job queue once no jobs are left, when "Unload models when idle"
+    is enabled, so other applications can use the GPU while this one sits idle.
+    Nothing here is destructive: the next job rebuilds its generator and reloads
+    the transformer exactly as it does for any other job.
+
+    Returns a (free_before_gb, free_after_gb) pair, or None when there is no CUDA
+    device to free anything on.
+    """
+    global current_generator
+
+    if not torch.cuda.is_available():
+        return None
+
+    free_before = get_cuda_free_memory_gb(gpu)
+    print("Unloading models from the GPU (queue is empty)...")
+
+    # The VAE, text encoders and image encoder are tracked as complete models.
+    # In high-VRAM mode they are moved to the GPU once at startup and the worker
+    # never moves them again, so unloading them there would leave the next job
+    # with its models on the wrong device. The transformer below is reloaded for
+    # every job either way, and on such a card it is the bulk of the VRAM anyway.
+    if not high_vram:
+        unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae)
+    else:
+        print("High-VRAM mode: keeping the text encoders, VAE and image encoder resident.")
+
+    # The transformer is moved layer by layer during generation rather than
+    # registered as complete, so it needs its own trip back to system RAM.
+    if current_generator is not None:
+        try:
+            current_generator.unload_loras()
+        except Exception:
+            traceback.print_exc()
+
+        transformer = getattr(current_generator, "transformer", None)
+        if transformer is not None:
+            try:
+                if not high_vram:
+                    # Undo the swap hooks first, or attribute access would copy
+                    # parameters straight back onto the GPU.
+                    DynamicSwapInstaller.uninstall_model(transformer)
+                transformer.to(device=cpu)
+            except Exception:
+                traceback.print_exc()
+            current_generator.transformer = None
+
+        current_generator = None
+
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+
+    free_after = get_cuda_free_memory_gb(gpu)
+    print(f"GPU unloaded. Free VRAM: {free_before:.2f} GB -> {free_after:.2f} GB")
+    return free_before, free_after
+
+
+def unload_all_models_from_gpu_if_enabled():
+    """Release the GPU only when the setting asks for it."""
+    if not settings.get("unload_models_when_idle", False):
+        return
+    try:
+        unload_all_models_from_gpu()
+    except Exception:
+        traceback.print_exc()
+
+
 # Set the worker function for the job queue - using the imported worker from modules/pipelines/worker.py
 job_queue.set_worker_function(worker)
+job_queue.set_idle_cleanup_function(unload_all_models_from_gpu_if_enabled)
 
 
 def process(
@@ -696,6 +768,7 @@ interface = create_interface(
     load_lora_file_fn=load_lora_file,
     job_queue=job_queue,
     settings=settings,
+    unload_gpu_fn=unload_all_models_from_gpu,
     lora_names=lora_names # Explicitly pass the found LoRA names
 )
 

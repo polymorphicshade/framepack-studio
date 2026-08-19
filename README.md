@@ -99,6 +99,8 @@ xFormers is the easy fallback where SageAttention will not build (`pip install x
 
 **Skip intermediate videos on long generations.** **Intermediate video interval** in the Settings tab controls how often the in-progress clip is written. Each write re-encodes the whole video generated so far, so the total encode cost grows with the square of the section count, and with **Clean up video files** on every intermediate is deleted at the end anyway. 1 (the default) writes one per section; set it to 4 or 0 for long jobs, at the cost of live previews.
 
+**Sharing the GPU with other apps.** **Unload models from VRAM when idle** in the Settings tab moves every model back to system RAM and releases the VRAM once the queue is empty, so another application can use the card while this one sits idle. It waits for the queue to drain rather than unloading between queued jobs, and the next job pays the reload cost at its start. **Free VRAM Now**, next to it, does the same thing on demand between jobs.
+
 **Leave CFG Scale at 1.0.** Anything above 1.0 adds a second transformer pass per step - it doubles generation time. The distilled guidance scale is the one to adjust instead.
 
 ## Contributing 

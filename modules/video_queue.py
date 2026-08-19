@@ -297,10 +297,20 @@ class VideoJobQueue:
         self.worker_thread.start()
         self.worker_function = None  # Will be set from outside
         self.is_processing = False  # Flag to track if we're currently processing a job
+        self.idle_cleanup_function = None  # Optional: called once the queue runs dry
     
     def set_worker_function(self, worker_function):
         """Set the worker function to use for processing jobs"""
         self.worker_function = worker_function
+
+    def set_idle_cleanup_function(self, idle_cleanup_function):
+        """Set a function to call after the last queued job finishes.
+
+        Used to release GPU resources once there is no more work waiting, rather
+        than after every job, which would only hand the VRAM back moments before
+        the next job asks for it again.
+        """
+        self.idle_cleanup_function = idle_cleanup_function
     
     def serialize_job(self, job):
         """Serialize a job to a JSON-compatible format"""
@@ -1581,6 +1591,15 @@ class VideoJobQueue:
                         self.save_queue_to_json()
                     except Exception as e:
                         print(f"Error saving queue to JSON after job completion: {e}")
+
+                    # Nothing else waiting: let the app release the GPU if asked to.
+                    if self.idle_cleanup_function is not None and next_job_id is None:
+                        try:
+                            self.idle_cleanup_function()
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
+                            print(f"Error during idle GPU cleanup: {e}")
                 
             except Exception as e:
                 import traceback

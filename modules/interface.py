@@ -47,6 +47,7 @@ def create_interface(
     load_lora_file_fn,
     job_queue,
     settings,
+    unload_gpu_fn=None,
     default_prompt: str = '[1s: The person waves hello] [3s: The person jumps up and down] [5s: The person does a dance]',
     lora_names: list = [],
     lora_values: list = []
@@ -987,6 +988,11 @@ def create_interface(
                             value=settings.get("intermediate_video_interval", 1),
                             info="How often the in-progress video is written. 1 = after every section. Higher values skip previews and speed up long generations, since each intermediate re-encodes the whole clip so far. 0 = write only the final video."
                         )
+                        unload_models_when_idle = gr.Checkbox(
+                            label="Unload models from VRAM when idle",
+                            value=settings.get("unload_models_when_idle", False),
+                            info="When the queue finishes, move every model back to system RAM and release the VRAM so other apps can use the GPU. The next job reloads them, which costs time at the start of that job. Waits until no jobs are left rather than unloading between queued jobs."
+                        )
                         auto_cleanup_on_startup = gr.Checkbox(
                             label="Automatically clean up temp folders on startup",
                             value=settings.get("auto_cleanup_on_startup", False),
@@ -1093,10 +1099,11 @@ def create_interface(
                         )
                         save_btn = gr.Button("💾 Save Settings")
                         cleanup_btn = gr.Button("🗑️ Clean Up Temporary Files")
+                        free_vram_btn = gr.Button("🧹 Free VRAM Now")
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val, num_generations_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val, num_generations_val, unload_models_when_idle_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1129,7 +1136,8 @@ def create_interface(
                                     ssl_certfile=ssl_certfile_val or None,
                                     ssl_keyfile=ssl_keyfile_val or None,
                                     intermediate_video_interval=int(intermediate_video_interval_val),
-                                    num_generations=max(1, int(num_generations_val or 1))
+                                    num_generations=max(1, int(num_generations_val or 1)),
+                                    unload_models_when_idle=unload_models_when_idle_val
                                 )
                                 # settings.save_settings() is called inside settings.save_settings if auto_save is true,
                                 # but for the manual button, we ensure it saves regardless of the auto_save flag's previous state.
@@ -1166,7 +1174,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval, num_generations],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval, num_generations, unload_models_when_idle],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1197,6 +1205,42 @@ def create_interface(
                             outputs=[cleanup_output]
                         )
 
+                        def free_vram_now_handler():
+                            """Unload every model from the GPU on demand.
+
+                            Ignores the "when idle" setting - the click is the
+                            request - but refuses while a job is running, since
+                            moving models out from under the worker would fail
+                            the generation.
+                            """
+                            if unload_gpu_fn is None:
+                                return "VRAM cleanup is unavailable in this session."
+
+                            if job_queue.is_processing or job_queue.current_job is not None:
+                                return "A job is still running. Wait for it to finish or cancel it first."
+
+                            try:
+                                result = unload_gpu_fn()
+                            except Exception as e:
+                                import traceback
+                                traceback.print_exc()
+                                return f"Error freeing VRAM: {e}"
+
+                            if result is None:
+                                return "No CUDA device found, so there is no VRAM to free."
+
+                            free_before, free_after = result
+                            return (f"Models unloaded from the GPU. "
+                                    f"Free VRAM: {free_before:.2f} GB -> {free_after:.2f} GB "
+                                    f"(+{free_after - free_before:.2f} GB). "
+                                    f"The next generation reloads them.")
+
+                        free_vram_btn.click(
+                            fn=free_vram_now_handler,
+                            inputs=None,
+                            outputs=[cleanup_output]
+                        )
+
                         # Add .change handlers for auto-saving individual settings
                         save_metadata.change(lambda v: handle_individual_setting_change("save_metadata", v, "Save Metadata"), inputs=[save_metadata], outputs=[status])
                         gpu_memory_preservation.change(lambda v: handle_individual_setting_change("gpu_memory_preservation", v, "GPU Memory Preservation"), inputs=[gpu_memory_preservation], outputs=[status])
@@ -1204,6 +1248,7 @@ def create_interface(
                         clean_up_videos.change(lambda v: handle_individual_setting_change("clean_up_videos", v, "Clean Up Videos"), inputs=[clean_up_videos], outputs=[status])
                         intermediate_video_interval.change(lambda v: handle_individual_setting_change("intermediate_video_interval", int(v), "Intermediate Video Interval"), inputs=[intermediate_video_interval], outputs=[status])
                         num_generations.change(lambda v: handle_individual_setting_change("num_generations", max(1, int(v or 1)), "Generations per Submission"), inputs=[num_generations], outputs=[status])
+                        unload_models_when_idle.change(lambda v: handle_individual_setting_change("unload_models_when_idle", v, "Unload Models When Idle"), inputs=[unload_models_when_idle], outputs=[status])
 
                         # NEW: auto-cleanup temp files on startup checkbox
                         auto_cleanup_on_startup.change(lambda v: handle_individual_setting_change("auto_cleanup_on_startup", v, "Auto Cleanup on Startup"), inputs=[auto_cleanup_on_startup], outputs=[status])

@@ -33,6 +33,9 @@ class Settings:
             # repeat the same inputs with a fresh random seed each, to get
             # variations of one idea without resubmitting by hand.
             "num_generations": 1,
+            # Move every model back to system RAM and hand the VRAM back to the
+            # driver once the queue runs dry, so other apps can use the GPU.
+            "unload_models_when_idle": False,
             "override_system_prompt": False,
             "auto_cleanup_on_startup": False, # ADDED: New setting for startup cleanup
             "latents_display_top": False, # NEW: Control latents preview position (False = right column, True = top of interface)
