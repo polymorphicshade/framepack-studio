@@ -30,6 +30,7 @@ from modules.llm_captioner import caption_image
 from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_progress_bar_html
 from diffusers_helper.bucket_tools import find_nearest_bucket
 from modules.pipelines.metadata_utils import create_metadata
+from modules.pipelines.video_tools import save_last_frame_as_png
 from modules import DUMMY_LORA_NAME # Import the constant
 
 from modules.toolbox_app import tb_processor
@@ -675,6 +676,11 @@ def create_interface(
                             image_mode="RGB"
                         )
                         result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=256, loop=True)
+                        last_frame_download = gr.DownloadButton(
+                            label="🖼️ Download Last Frame",
+                            visible=False,
+                            size="sm"
+                        )
                         progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
                         progress_bar = gr.HTML('', elem_classes='no-generating-animation')
                         with gr.Row():
@@ -1562,6 +1568,32 @@ def create_interface(
             fn=update_start_button_state,
             inputs=[model_type, input_video], # Current values of model_type and input_video
             outputs=[start_button, video_input_required_message]
+        )
+
+        # The last frame of a finished video is the natural starting image for
+        # continuing the generation later, so keep a PNG of it ready for download
+        # whenever a video is showing. A DownloadButton hands over the file it
+        # already holds, so the frame has to be extracted when the video changes
+        # rather than when the button is clicked.
+        def update_last_frame_download(video_path):
+            if not video_path:
+                return gr.update(value=None, visible=False)
+
+            frame_path = None
+            try:
+                temp_dir = os.path.join(settings.get("gradio_temp_dir") or "./temp", "last_frames")
+                frame_path = save_last_frame_as_png(video_path, temp_dir)
+            except Exception as e:
+                print(f"Could not extract the last frame from {video_path}: {e}")
+
+            if not frame_path:
+                return gr.update(value=None, visible=False)
+            return gr.update(value=frame_path, visible=True)
+
+        result_video.change(
+            fn=update_last_frame_download,
+            inputs=[result_video],
+            outputs=[last_frame_download]
         )
 
         def show_batch_gallery(files):
