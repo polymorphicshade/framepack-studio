@@ -72,9 +72,14 @@ def get_cuda_free_memory_gb(device=None):
     if device is None:
         device = gpu
 
-    memory_stats = torch.cuda.memory_stats(device)
-    bytes_active = memory_stats['active_bytes.all.current']
-    bytes_reserved = memory_stats['reserved_bytes.all.current']
+    # torch.cuda.memory_stats() builds a large nested dict on every call, and the
+    # model move loops below call this once per module (~1500 modules for the
+    # transformer, twice per generated section). memory_allocated/memory_reserved
+    # read the same counters as single values, so the loops stop paying for the
+    # dict. In inference (no autograd graph holding freed blocks) allocated and
+    # active_bytes are the same number.
+    bytes_active = torch.cuda.memory_allocated(device)
+    bytes_reserved = torch.cuda.memory_reserved(device)
     bytes_free_cuda, _ = torch.cuda.mem_get_info(device)
     bytes_inactive_reserved = bytes_reserved - bytes_active
     bytes_total_available = bytes_free_cuda + bytes_inactive_reserved
@@ -85,12 +90,14 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
     print(f'Moving {model.__class__.__name__} to {target_device} with preserved memory: {preserved_memory_gb} GB')
 
     for m in model.modules():
+        if not hasattr(m, 'weight'):
+            continue
+
         if get_cuda_free_memory_gb(target_device) <= preserved_memory_gb:
             torch.cuda.empty_cache()
             return
 
-        if hasattr(m, 'weight'):
-            m.to(device=target_device)
+        m.to(device=target_device)
 
     model.to(device=target_device)
     torch.cuda.empty_cache()
@@ -101,12 +108,14 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
     print(f'Offloading {model.__class__.__name__} from {target_device} to preserve memory: {preserved_memory_gb} GB')
 
     for m in model.modules():
+        if not hasattr(m, 'weight'):
+            continue
+
         if get_cuda_free_memory_gb(target_device) >= preserved_memory_gb:
             torch.cuda.empty_cache()
             return
 
-        if hasattr(m, 'weight'):
-            m.to(device=cpu)
+        m.to(device=cpu)
 
     model.to(device=cpu)
     torch.cuda.empty_cache()

@@ -956,6 +956,14 @@ def create_interface(
                             value=settings.get("clean_up_videos", True),
                             info="If checked, only the final video will be kept after generation."
                         )
+                        intermediate_video_interval = gr.Slider(
+                            label="Intermediate video interval (sections)",
+                            minimum=0,
+                            maximum=10,
+                            step=1,
+                            value=settings.get("intermediate_video_interval", 1),
+                            info="How often the in-progress video is written. 1 = after every section. Higher values skip previews and speed up long generations, since each intermediate re-encodes the whole clip so far. 0 = write only the final video."
+                        )
                         auto_cleanup_on_startup = gr.Checkbox(
                             label="Automatically clean up temp folders on startup",
                             value=settings.get("auto_cleanup_on_startup", False),
@@ -1065,7 +1073,7 @@ def create_interface(
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1096,7 +1104,8 @@ def create_interface(
                                     startup_model_type=startup_model_type_val,
                                     startup_preset_name=startup_preset_name_val,
                                     ssl_certfile=ssl_certfile_val or None,
-                                    ssl_keyfile=ssl_keyfile_val or None
+                                    ssl_keyfile=ssl_keyfile_val or None,
+                                    intermediate_video_interval=int(intermediate_video_interval_val)
                                 )
                                 # settings.save_settings() is called inside settings.save_settings if auto_save is true,
                                 # but for the manual button, we ensure it saves regardless of the auto_save flag's previous state.
@@ -1133,7 +1142,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1169,6 +1178,7 @@ def create_interface(
                         gpu_memory_preservation.change(lambda v: handle_individual_setting_change("gpu_memory_preservation", v, "GPU Memory Preservation"), inputs=[gpu_memory_preservation], outputs=[status])
                         mp4_crf.change(lambda v: handle_individual_setting_change("mp4_crf", v, "MP4 Compression"), inputs=[mp4_crf], outputs=[status])
                         clean_up_videos.change(lambda v: handle_individual_setting_change("clean_up_videos", v, "Clean Up Videos"), inputs=[clean_up_videos], outputs=[status])
+                        intermediate_video_interval.change(lambda v: handle_individual_setting_change("intermediate_video_interval", int(v), "Intermediate Video Interval"), inputs=[intermediate_video_interval], outputs=[status])
 
                         # NEW: auto-cleanup temp files on startup checkbox
                         auto_cleanup_on_startup.change(lambda v: handle_individual_setting_change("auto_cleanup_on_startup", v, "Auto Cleanup on Startup"), inputs=[auto_cleanup_on_startup], outputs=[status])

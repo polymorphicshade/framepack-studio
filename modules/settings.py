@@ -24,6 +24,11 @@ class Settings:
             "gradio_theme": "default",
             "mp4_crf": 16,
             "clean_up_videos": True,
+            # How often to write the in-progress video. 1 = after every section (a
+            # preview per section), N = every Nth section, 0 = only the final video.
+            # Each intermediate re-encodes the whole clip so far and, with
+            # clean_up_videos on, is deleted at the end anyway.
+            "intermediate_video_interval": 1,
             "override_system_prompt": False,
             "auto_cleanup_on_startup": False, # ADDED: New setting for startup cleanup
             "latents_display_top": False, # NEW: Control latents preview position (False = right column, True = top of interface)

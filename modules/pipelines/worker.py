@@ -911,10 +911,24 @@ def worker(
             if not high_vram:
                 unload_complete_models()
 
-            output_filename = os.path.join(output_dir, f'{job_id}_{total_generated_latent_frames}.mp4')
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=settings.get("mp4_crf"))
-            print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
-            stream_to_use.output_queue.push(('file', output_filename))
+            # Every intermediate video re-encodes the entire clip generated so far,
+            # so the encode cost grows with the square of the section count, and
+            # with clean_up_videos on all of them but the last are deleted again at
+            # the end. intermediate_video_interval trades those previews for time:
+            # 1 = one per section (default), N = every Nth, 0 = final video only.
+            try:
+                intermediate_interval = int(settings.get("intermediate_video_interval", 1))
+            except (TypeError, ValueError):
+                intermediate_interval = 1
+            write_intermediate = intermediate_interval > 0 and (section_idx + 1) % intermediate_interval == 0
+
+            if is_last_section or write_intermediate:
+                output_filename = os.path.join(output_dir, f'{job_id}_{total_generated_latent_frames}.mp4')
+                save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=settings.get("mp4_crf"))
+                print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
+                stream_to_use.output_queue.push(('file', output_filename))
+            else:
+                print(f'Decoded. Skipped intermediate video for section {section_idx + 1}. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
 
             if is_last_section:
                 break

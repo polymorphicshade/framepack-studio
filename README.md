@@ -79,6 +79,27 @@ The UI is then at `https://localhost:8443`. A self-signed certificate is generat
 
 HTTPS is port 8443, not 7860 — in this stack 7860 is the app's own plain HTTP listener, published on `127.0.0.1` only, and nothing there speaks TLS. Copy `.env.https.example` to `.env` to change either port, or to put the host's LAN address in the certificate before first boot.
 
+## Performance
+
+Generation time is dominated by the transformer: `steps` x sections forward passes, plus the cost of streaming the model between CPU and GPU on cards that cannot hold it. The levers below are ordered by how much they typically matter.
+
+**Install an attention library.** `diffusers_helper/models/hunyuan_video_packed.py` picks the fastest backend it can import, in the order SageAttention > Flash Attention > xFormers > PyTorch SDPA, and prints which one it chose at startup. None of them is in `requirements.txt`, so a default install runs on SDPA. SDPA already uses the flash kernel on Ampere and later, so expect a useful gain rather than a dramatic one - SageAttention's INT8 attention is the only one that changes the arithmetic enough to pull clearly ahead:
+
+```bash
+pip install triton          # triton-windows on Windows
+pip install sageattention
+```
+
+xFormers is the easy fallback where SageAttention will not build (`pip install xformers`, matched to your torch build). Only one is used; installing several is harmless.
+
+**Keep more of the transformer resident.** The model is bf16 and larger than 24GB, so on a 24GB card it is streamed layer by layer every section. **GPU Memory Preservation** in the Settings tab is how much VRAM is left free when loading it - lower means more layers stay on the GPU and less is copied over PCIe each section. 6GB is the safe default; on a 24GB card with nothing else running, 4-5GB is usually still safe and measurably faster. Back it off if you hit OOM at your resolution. Note the offload that runs before VAE decoding frees to a fixed 8GB regardless of this setting, so it only affects the sampling phase.
+
+**Leave caching on.** **MagCache** is the default caching strategy and already skips a good fraction of steps. Raising **MagCache Threshold** and **Max Consecutive Skips**, or lowering **Retention Ratio**, skips more steps for less fidelity - worth tuning per model, and the fastest single knob after attention.
+
+**Skip intermediate videos on long generations.** **Intermediate video interval** in the Settings tab controls how often the in-progress clip is written. Each write re-encodes the whole video generated so far, so the total encode cost grows with the square of the section count, and with **Clean up video files** on every intermediate is deleted at the end anyway. 1 (the default) writes one per section; set it to 4 or 0 for long jobs, at the cost of live previews.
+
+**Leave CFG Scale at 1.0.** Anything above 1.0 adds a second transformer pass per step - it doubles generation time. The distilled guidance scale is the one to adjust instead.
+
 ## Contributing 
 
 We would love your help building FramePack Studio! To make collaboration effective, please adhere to the following:
