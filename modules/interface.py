@@ -326,13 +326,27 @@ def create_interface(
         min-height: 300px !important;
         object-fit: contain;
     }
-    /* The finished-frames preview is a fixed-height box, but the <video> keeps
-       its own aspect ratio and spills out of it - over the buttons underneath -
-       whenever the clip is taller than the box. Letterbox it inside instead. */
+    /* Finished Frames.
+       The panel used to be pinned to a fixed pixel height, so once the layout
+       collapsed to one column the player grew wider, its height grew with the
+       aspect ratio, and everything past the fixed height - including the control
+       bar - was clipped. Sizing is left to the CSS here: the player scales with
+       the column and is capped against the viewport, so it always fits.
+       max-height is in vh/px rather than a percentage on purpose, because a
+       percentage only resolves when the parent has a definite height, which this
+       wrapper does not. */
     #result-video video {
-        max-height: 100%;
         width: 100%;
+        height: auto;
+        max-height: min(60vh, 480px);
         object-fit: contain;
+        display: block;
+    }
+    /* Keep the wrapper from imposing a height the player has to be clipped into. */
+    #result-video .wrap,
+    #result-video .container {
+        height: auto;
+        max-height: none;
     }
     /* NEW: Closes the gap between input tabs and the pipeline accordion below them */
     #pipeline-controls-wrapper {
@@ -702,7 +716,8 @@ def create_interface(
                             # null and reads as false, so the download icon never
                             # appears unless it is asked for explicitly.
                             show_download_button=True,
-                            height=256,
+                            # No fixed height: it is what clipped the player on
+                            # narrow layouts. See the #result-video CSS above.
                             loop=True,
                             elem_id="result-video"
                         )
