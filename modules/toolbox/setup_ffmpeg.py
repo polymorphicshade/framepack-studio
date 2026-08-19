@@ -6,6 +6,43 @@ import zipfile
 import shutil
 from tqdm import tqdm
 
+# This runs at import time (see modules/toolbox_app.py), so it sits between the
+# user and a usable app. One attempt, short timeouts, and a clean give-up: a
+# mirror that is unreachable or wedged costs seconds, not minutes, and the app
+# still starts without the toolbox's bundled FFmpeg.
+CONNECT_TIMEOUT_SECONDS = 10
+# Applies between chunks rather than to the whole transfer, so a slow but
+# progressing download still completes while a stalled one aborts.
+READ_TIMEOUT_SECONDS = 30
+
+# GitHub release assets, served from a CDN. The "latest" tag is rolling, so
+# these URLs stay live as the builds are refreshed. The gpl variant carries
+# libx264 and libvpx-vp9, both of which the toolbox encodes with.
+DOWNLOAD_SOURCES = {
+    "windows": (
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+        "ffmpeg-n8.1-latest-win64-gpl-8.1.zip"
+    ),
+    "linux": (
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+        "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
+    ),
+}
+
+
+def find_binary(search_root, binary_name):
+    """Locate a binary anywhere under search_root, or return None.
+
+    Archive layouts differ between builds and change between versions - some put
+    the binaries in a bin/ subdirectory, some at the top level - so search for
+    them instead of hardcoding a path that a new release would break.
+    """
+    for dirpath, _dirnames, filenames in os.walk(search_root):
+        if binary_name in filenames:
+            return os.path.join(dirpath, binary_name)
+    return None
+
+
 def setup_ffmpeg():
     """Download and set up a cross-platform, full build of FFmpeg and FFprobe."""
     # Get the directory of the current script, which is now inside 'modules/toolbox/'
@@ -19,22 +56,18 @@ def setup_ffmpeg():
         platform = "windows"
         ffmpeg_name = 'ffmpeg.exe'
         ffprobe_name = 'ffprobe.exe'
-        download_url = "https://github.com/GyanD/codexffmpeg/releases/download/7.0/ffmpeg-7.0-full_build.zip"
         archive_name = 'ffmpeg.zip'
-        # For Windows, the path is static and predictable
-        path_in_archive_to_bin = 'ffmpeg-7.0-full_build/bin'
     elif sys.platform.startswith("linux"):
         platform = "linux"
         ffmpeg_name = 'ffmpeg'
         ffprobe_name = 'ffprobe'
-        # This link always points to the latest static build
-        download_url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
         archive_name = 'ffmpeg.tar.xz'
-        # --- CHANGE: We no longer hardcode the path_in_archive_to_bin for Linux ---
     else:
         print(f"Unsupported platform: {sys.platform}")
         print("Please download FFmpeg manually and place ffmpeg/ffprobe in the 'bin' directory.")
         return
+
+    download_url = DOWNLOAD_SOURCES[platform]
 
     ffmpeg_path = os.path.join(bin_dir, ffmpeg_name)
     ffprobe_path = os.path.join(bin_dir, ffprobe_name)
@@ -44,13 +77,13 @@ def setup_ffmpeg():
         return
 
     archive_path = os.path.join(bin_dir, archive_name)
+    temp_extract_dir = os.path.join(bin_dir, 'temp_ffmpeg_extract')
 
     try:
         print(f"FFmpeg not found. Downloading and setting up for {platform}...")
         download_ffmpeg(download_url, archive_path)
 
         print("Download complete. Installing...")
-        temp_extract_dir = os.path.join(bin_dir, 'temp_ffmpeg_extract')
         os.makedirs(temp_extract_dir, exist_ok=True)
 
         if archive_name.endswith('.zip'):
@@ -58,26 +91,19 @@ def setup_ffmpeg():
                 archive.extractall(path=temp_extract_dir)
         elif archive_name.endswith('.tar.xz'):
             with tarfile.open(archive_path, 'r:xz') as archive:
-                archive.extractall(path=temp_extract_dir)
-        
-        # --- ROBUSTNESS CHANGE FOR LINUX ---
-        # Dynamically find the path to the binaries instead of hardcoding it.
-        if platform == "linux":
-            # Find the single subdirectory inside the extraction folder
-            subdirs = [d for d in os.listdir(temp_extract_dir) if os.path.isdir(os.path.join(temp_extract_dir, d))]
-            if len(subdirs) != 1:
-                raise Exception(f"Expected one subdirectory in Linux FFmpeg archive, but found {len(subdirs)}.")
-            # The binaries are directly inside this discovered folder
-            source_bin_dir = os.path.join(temp_extract_dir, subdirs[0])
-        else: # For Windows, we use the predefined path
-            source_bin_dir = os.path.join(temp_extract_dir, path_in_archive_to_bin)
+                try:
+                    archive.extractall(path=temp_extract_dir, filter='data')
+                except TypeError:
+                    # Python 3.10 has no extraction filters.
+                    archive.extractall(path=temp_extract_dir)
 
-        # Find the executables in the now correctly identified source folder and copy them
-        source_ffmpeg_path = os.path.join(source_bin_dir, ffmpeg_name)
-        source_ffprobe_path = os.path.join(source_bin_dir, ffprobe_name)
+        source_ffmpeg_path = find_binary(temp_extract_dir, ffmpeg_name)
+        source_ffprobe_path = find_binary(temp_extract_dir, ffprobe_name)
 
-        if not os.path.exists(source_ffmpeg_path) or not os.path.exists(source_ffprobe_path):
-            raise FileNotFoundError(f"Could not find ffmpeg/ffprobe in the expected location: {source_bin_dir}")
+        if not source_ffmpeg_path or not source_ffprobe_path:
+            raise FileNotFoundError(
+                f"Could not find {ffmpeg_name} and {ffprobe_name} anywhere in the downloaded archive."
+            )
 
         shutil.copy(source_ffmpeg_path, ffmpeg_path)
         shutil.copy(source_ffprobe_path, ffprobe_path)
@@ -86,26 +112,31 @@ def setup_ffmpeg():
             os.chmod(ffmpeg_path, 0o755)
             os.chmod(ffprobe_path, 0o755)
 
-        print(f"✅ FFmpeg setup complete. Binaries are in: {bin_dir}")
+        print(f"FFmpeg setup complete. Binaries are in: {bin_dir}")
 
     except Exception as e:
-        print(f"\n❌ Error setting up FFmpeg: {e}")
-        import traceback
-        traceback.print_exc()
-        print("\nPlease download FFmpeg manually and place the 'ffmpeg' and 'ffprobe' executables in the 'bin' directory.")
-        print(f"Download for Windows: https://www.gyan.dev/ffmpeg/builds/")
-        print(f"Download for Linux: https://johnvansickle.com/ffmpeg/")
+        # Deliberately not retried: this blocks app startup, and the toolbox is
+        # the only feature that needs these binaries.
+        print(f"\nCould not set up FFmpeg: {e}")
+        print("Continuing without the bundled FFmpeg - the post-processing toolbox will be limited.")
+        print(f"To fix it, download FFmpeg manually and put {ffmpeg_name} and {ffprobe_name} in: {bin_dir}")
+        print(f"Tried: {download_url}")
     finally:
         # Clean up
         if os.path.exists(archive_path):
             os.remove(archive_path)
-        if 'temp_extract_dir' in locals() and os.path.exists(temp_extract_dir):
-            shutil.rmtree(temp_extract_dir)
+        if os.path.exists(temp_extract_dir):
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+
 
 def download_ffmpeg(url, destination):
-    """Download a file with progress bar"""
-    response = requests.get(url, stream=True)
-    response.raise_for_status() # Raise an exception for bad status codes
+    """Download a file with progress bar. One attempt, then give up."""
+    response = requests.get(
+        url,
+        stream=True,
+        timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()  # Raise an exception for bad status codes
     total_size = int(response.headers.get('content-length', 0))
     block_size = 1024
 
