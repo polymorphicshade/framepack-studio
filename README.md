@@ -14,7 +14,7 @@ FramePack Studio is an AI video generation application based on FramePack that s
 - **F1, Original and Video Extension Generations**: Run all in a single queue
 - **End Frame Control for 'Original' Model**: Provides greater control over generations
 - **Upscaling and Post-processing**
-- **Download Last Frame**: Grab the final frame of a finished video as a PNG, ready to feed back in as the starting image to continue the generation
+- **Continue From Last Frame**: Download the final frame of a finished video as a PNG, or load it straight into Start Frame to carry the generation on from where it ended
 - **Timestamped Prompts**: Define different prompts for specific time segments in your video
 - **Prompt Blending**: Define the blending time between timestamped prompts
 - **LoRA Support**: Works with most (all?) Hunyuan Video LoRAs

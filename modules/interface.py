@@ -676,11 +676,20 @@ def create_interface(
                             image_mode="RGB"
                         )
                         result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=256, loop=True)
-                        last_frame_download = gr.DownloadButton(
-                            label="🖼️ Download Last Frame",
-                            visible=False,
-                            size="sm"
-                        )
+                        # Holds the PNG extracted from whatever video is currently shown,
+                        # so both buttons below work off one extraction.
+                        last_frame_path_state = gr.State(None)
+                        with gr.Row():
+                            last_frame_download = gr.DownloadButton(
+                                label="🖼️ Download Last Frame",
+                                visible=False,
+                                size="sm"
+                            )
+                            use_last_frame_button = gr.Button(
+                                value="↪️ Use as Start Frame",
+                                visible=False,
+                                size="sm"
+                            )
                         progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
                         progress_bar = gr.HTML('', elem_classes='no-generating-animation')
                         with gr.Row():
@@ -1575,9 +1584,9 @@ def create_interface(
         # whenever a video is showing. A DownloadButton hands over the file it
         # already holds, so the frame has to be extracted when the video changes
         # rather than when the button is clicked.
-        def update_last_frame_download(video_path):
+        def update_last_frame_actions(video_path):
             if not video_path:
-                return gr.update(value=None, visible=False)
+                return gr.update(value=None, visible=False), gr.update(visible=False), None
 
             frame_path = None
             try:
@@ -1587,13 +1596,27 @@ def create_interface(
                 print(f"Could not extract the last frame from {video_path}: {e}")
 
             if not frame_path:
-                return gr.update(value=None, visible=False)
-            return gr.update(value=frame_path, visible=True)
+                return gr.update(value=None, visible=False), gr.update(visible=False), None
+            return gr.update(value=frame_path, visible=True), gr.update(visible=True), frame_path
 
         result_video.change(
-            fn=update_last_frame_download,
+            fn=update_last_frame_actions,
             inputs=[result_video],
-            outputs=[last_frame_download]
+            outputs=[last_frame_download, use_last_frame_button, last_frame_path_state]
+        )
+
+        # Load that same frame straight into the Start Frame input, to continue the
+        # video from where it left off without a round trip through the filesystem.
+        def use_last_frame_as_start(frame_path):
+            if not frame_path or not os.path.isfile(frame_path):
+                print("No last frame available to load as the start frame.")
+                return gr.update()
+            return gr.update(value=frame_path)
+
+        use_last_frame_button.click(
+            fn=use_last_frame_as_start,
+            inputs=[last_frame_path_state],
+            outputs=[input_image]
         )
 
         def show_batch_gallery(files):
