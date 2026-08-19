@@ -31,7 +31,7 @@ services:
     # Bound to loopback only - nginx is the way in from anywhere else. Drop the
     # 127.0.0.1 prefix if you want plain HTTP on the LAN as well.
     ports:
-      - "127.0.0.1:${PORT:-7860}:7860"
+      - "127.0.0.1:${PORT:-8005}:8005"
     volumes:
       - "./loras:/app/loras"
       - "./outputs:/app/outputs"
