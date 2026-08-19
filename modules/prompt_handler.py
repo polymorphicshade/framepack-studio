@@ -3,6 +3,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+# The one definition of a timestamp section: [2s: text] or [0s-2s: text].
+# The parser and the linter both use it, so they can never disagree about what
+# counts as a valid timestamp.
+TIMESTAMP_PATTERN = r'\[(\d+(?:\.\d+)?s)(?:-(\d+(?:\.\d+)?s))?\s*:\s*(.*?)\]'
+
+# Anything in square brackets, valid timestamp or not.
+ANY_BRACKET_PATTERN = r'\[[^\[\]]*\]'
+
+
 @dataclass
 class PromptSection:
     """Represents a section of the prompt with specific timing information"""
@@ -68,7 +77,7 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
     
     sections = []
     # Find all timestamp sections [time: text]
-    timestamp_pattern = r'\[(\d+(?:\.\d+)?s)(?:-(\d+(?:\.\d+)?s))?\s*:\s*(.*?)\]'
+    timestamp_pattern = TIMESTAMP_PATTERN
     regular_text = prompt_text
     
     for match in re.finditer(timestamp_pattern, prompt_text):
@@ -162,3 +171,97 @@ def get_quick_prompts() -> List[List[str]]:
         '[0s: Person looks surprised] [1.1s: Person raises arms above head] [2.2s-3.3s: Person puts hands on hips]'
     ]
     return [[x] for x in prompts]
+
+
+def lint_prompt(prompt_text: str, latent_window_size: int = 9, token_count_fn=None,
+                token_limit: int = 256, fps: int = 30) -> List[str]:
+    """
+    Check a prompt for the ways this app silently ignores what was typed.
+
+    Every problem here is one the pipeline handles without complaint, so the only
+    symptom is a video that does not match the prompt. Returns a list of plain
+    warning strings, empty when the prompt is fine.
+
+    Args:
+        prompt_text: The raw prompt as typed.
+        latent_window_size: Used to work out the section grid timestamps snap to.
+        token_count_fn: Optional callable returning the token count for a string.
+                        Without it, the length check is skipped.
+        token_limit: Tokens available to each section before truncation.
+        fps: Frames per second the section grid is derived from.
+
+    Returns:
+        List of warnings, most serious first.
+    """
+    warnings: List[str] = []
+
+    if not prompt_text or not prompt_text.strip():
+        return warnings
+
+    timestamp_matches = list(re.finditer(TIMESTAMP_PATTERN, prompt_text))
+
+    # 1. Bracketed text that looks like an attempted timestamp but did not parse.
+    #    The parser leaves it in the prompt verbatim, brackets and all.
+    matched_spans = [m.group(0) for m in timestamp_matches]
+    leftover_brackets = [
+        b for b in re.findall(ANY_BRACKET_PATTERN, prompt_text) if b not in matched_spans
+    ]
+    looks_like_timestamp = re.compile(r'^\[\s*\d+(?:\.\d+)?\s*(?:-\s*\d+(?:\.\d+)?\s*)?[:s]')
+    bad_timestamps = [b for b in leftover_brackets if looks_like_timestamp.match(b)]
+    for bad in bad_timestamps:
+        warnings.append(
+            f"{bad} is not a valid timestamp, so it is being sent to the model as literal text. "
+            f"Timestamps need the 's' on every number, e.g. [2s: text] or [0s-2s: text]."
+        )
+
+    # 2. Loose text alongside timestamps only covers the run-up to the first one,
+    #    which is rarely what someone writing a style prefix expects.
+    if timestamp_matches:
+        leftover_text = prompt_text
+        for m in timestamp_matches:
+            leftover_text = leftover_text.replace(m.group(0), "")
+        for b in leftover_brackets:
+            leftover_text = leftover_text.replace(b, "")
+        if leftover_text.strip():
+            first_start = min(float(m.group(1).rstrip('s')) for m in timestamp_matches)
+            warnings.append(
+                f"Text outside the brackets is not applied to the whole video. "
+                f"\"{leftover_text.strip()[:40]}\" only covers the part before {first_start:g}s. "
+                f"To keep it throughout, repeat it inside each timestamped section."
+            )
+
+    # 3. Timestamps that do not land on a section boundary are silently snapped.
+    section_duration = (latent_window_size * 4 - 3) / fps
+    off_grid = []
+    for m in timestamp_matches:
+        for group in (1, 2):
+            if m.group(group) is None:
+                continue
+            value = float(m.group(group).rstrip('s'))
+            snapped = round(value / section_duration) * section_duration
+            if abs(snapped - value) > 0.01:
+                off_grid.append(f"{value:g}s becomes {snapped:.1f}s")
+    if off_grid:
+        warnings.append(
+            f"Timestamps snap to the {section_duration:.1f}s section grid: " + ", ".join(off_grid) + "."
+        )
+
+    # 4. Each section is encoded on its own, so the token limit applies per
+    #    section rather than to the prompt as a whole.
+    if token_count_fn is not None:
+        section_texts = [m.group(3).strip() for m in timestamp_matches] if timestamp_matches else [prompt_text.strip()]
+        for text in section_texts:
+            if not text:
+                continue
+            try:
+                count = token_count_fn(text)
+            except Exception:
+                break
+            if count > token_limit:
+                warnings.append(
+                    f"A section is {count} tokens long and will be truncated at about {token_limit}. "
+                    f"Everything past that point is dropped: \"{text[:40]}...\""
+                )
+                break
+
+    return warnings

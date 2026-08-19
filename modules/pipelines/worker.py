@@ -252,33 +252,52 @@ def worker(
         print(f"Worker starting for model type: {model_type}")
         print(f"Worker: Before model assignment, studio_module.current_generator is {type(studio_module.current_generator)}, id: {id(studio_module.current_generator)}")
         
-        # Create the appropriate model generator
-        new_generator = create_model_generator(
-            model_type,
-            text_encoder=text_encoder,
-            text_encoder_2=text_encoder_2,
-            tokenizer=tokenizer,
-            tokenizer_2=tokenizer_2,
-            vae=vae,
-            image_encoder=image_encoder,
-            feature_extractor=feature_extractor,
-            high_vram=high_vram,
-            prompt_embedding_cache=prompt_embedding_cache,
-            offline=args.offline,
-            settings=settings
+        # Reuse the transformer already in memory when this job wants the same
+        # model. Rebuilding it means another from_pretrained plus reinstalling the
+        # swap hooks across every module, which is pure overhead for a run of jobs
+        # on one model - the common case when several generations are queued at
+        # once. get_model_name() returns exactly the model_type strings that
+        # create_model_generator dispatches on, so this never confuses two
+        # generators that happen to share a checkpoint (Video vs F1, say).
+        existing_generator = studio_module.current_generator
+        reuse_existing_model = (
+            existing_generator is not None
+            and getattr(existing_generator, 'transformer', None) is not None
+            and existing_generator.get_model_name() == model_type
         )
-        
-        # Update the global generator
-        # This modifies the 'current_generator' attribute OF THE '__main__' MODULE OBJECT
-        studio_module.current_generator = new_generator
-        print(f"Worker: AFTER model assignment, studio_module.current_generator is {type(studio_module.current_generator)}, id: {id(studio_module.current_generator)}")
-        if studio_module.current_generator:
-             print(f"Worker: studio_module.current_generator.transformer is {type(studio_module.current_generator.transformer)}")        
-             
-        # Load the transformer model
-        studio_module.current_generator.load_model()
-        
-        # Ensure the model has no LoRAs loaded
+
+        if reuse_existing_model:
+            print(f"Worker: reusing the {model_type} model already in memory.")
+        else:
+            # Create the appropriate model generator
+            new_generator = create_model_generator(
+                model_type,
+                text_encoder=text_encoder,
+                text_encoder_2=text_encoder_2,
+                tokenizer=tokenizer,
+                tokenizer_2=tokenizer_2,
+                vae=vae,
+                image_encoder=image_encoder,
+                feature_extractor=feature_extractor,
+                high_vram=high_vram,
+                prompt_embedding_cache=prompt_embedding_cache,
+                offline=args.offline,
+                settings=settings
+            )
+
+            # Update the global generator
+            # This modifies the 'current_generator' attribute OF THE '__main__' MODULE OBJECT
+            studio_module.current_generator = new_generator
+            print(f"Worker: AFTER model assignment, studio_module.current_generator is {type(studio_module.current_generator)}, id: {id(studio_module.current_generator)}")
+            if studio_module.current_generator:
+                 print(f"Worker: studio_module.current_generator.transformer is {type(studio_module.current_generator.transformer)}")
+
+            # Load the transformer model
+            studio_module.current_generator.load_model()
+
+        # Ensure the model has no LoRAs loaded. This matters most on the reuse
+        # path, where the previous job's adapters would otherwise still be
+        # attached to the transformer.
         print(f"Ensuring {model_type} model has no LoRAs loaded")
         studio_module.current_generator.unload_loras()
 

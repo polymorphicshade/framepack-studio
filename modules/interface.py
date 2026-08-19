@@ -24,7 +24,7 @@ import ffmpeg
 from diffusers_helper.utils import generate_timestamp
 
 from modules.video_queue import JobStatus, Job, JobType
-from modules.prompt_handler import get_section_boundaries, get_quick_prompts, parse_timestamped_prompt
+from modules.prompt_handler import get_section_boundaries, get_quick_prompts, parse_timestamped_prompt, lint_prompt
 from modules.llm_enhancer import enhance_prompt
 from modules.llm_captioner import caption_image
 from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_progress_bar_html
@@ -48,6 +48,7 @@ def create_interface(
     job_queue,
     settings,
     unload_gpu_fn=None,
+    token_count_fn=None,
     default_prompt: str = '[1s: The person waves hello] [3s: The person jumps up and down] [5s: The person does a dance]',
     lora_names: list = [],
     lora_values: list = []
@@ -525,12 +526,22 @@ def create_interface(
 
                             with gr.Row():
                                 prompt = gr.Textbox(label="Prompt", value=default_prompt, scale=10)
+                            # Surfaces the ways a prompt is silently ignored: timestamps that
+                            # did not parse, loose text that covers less than expected,
+                            # snapping, and truncation. Empty when the prompt is clean.
+                            prompt_warnings = gr.Markdown("", visible=False)
                             with gr.Row():
                                 enhance_prompt_btn = gr.Button("✨ Enhance", scale=1)
                                 caption_btn = gr.Button("✨ Caption", scale=1)
 
                             with gr.Accordion("Prompt Parameters", open=False):
-                                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=True)  # Make visible for both models
+                                n_prompt = gr.Textbox(
+                                    label="Negative Prompt (needs CFG Scale above 1.0)",
+                                    value="",
+                                    visible=True,
+                                    interactive=False,
+                                    info="At CFG Scale 1.0 the negative prompt is skipped entirely, so this box does nothing. Raise CFG Scale above 1.0 to enable it - that adds a second model pass per step and roughly doubles generation time."
+                                )  # Make visible for both models
 
                                 blend_sections = gr.Slider(
                                     minimum=0, maximum=10, value=4, step=1,
@@ -1698,6 +1709,52 @@ def create_interface(
             fn=use_last_frame_as_start,
             inputs=[last_frame_path_state],
             outputs=[input_image]
+        )
+
+        # --- Prompt linting -------------------------------------------------
+        # Every problem lint_prompt reports is one the pipeline accepts without
+        # complaint, so the only symptom would otherwise be a video that ignores
+        # part of the prompt.
+        def update_prompt_warnings(prompt_text, window_size):
+            try:
+                issues = lint_prompt(
+                    prompt_text or "",
+                    latent_window_size=int(window_size) if window_size else 9,
+                    token_count_fn=token_count_fn,
+                )
+            except Exception as e:
+                print(f"Prompt lint failed: {e}")
+                return gr.update(value="", visible=False)
+
+            if not issues:
+                return gr.update(value="", visible=False)
+
+            body = "\n".join(f"- {issue}" for issue in issues)
+            return gr.update(value=f"⚠️ **Check the prompt**\n{body}", visible=True)
+
+        prompt.change(
+            fn=update_prompt_warnings,
+            inputs=[prompt, latent_window_size],
+            outputs=[prompt_warnings]
+        )
+        latent_window_size.change(
+            fn=update_prompt_warnings,
+            inputs=[prompt, latent_window_size],
+            outputs=[prompt_warnings]
+        )
+
+        # The negative prompt is only consulted when CFG Scale is above 1.0; at
+        # 1.0 the sampler skips the pass altogether, so the box is disabled to
+        # stop people typing into a control that cannot do anything.
+        def update_negative_prompt_state(cfg_value):
+            if cfg_value and float(cfg_value) > 1.0:
+                return gr.update(interactive=True, label="Negative Prompt")
+            return gr.update(interactive=False, label="Negative Prompt (needs CFG Scale above 1.0)")
+
+        cfg.change(
+            fn=update_negative_prompt_state,
+            inputs=[cfg],
+            outputs=[n_prompt]
         )
 
         def show_batch_gallery(files):

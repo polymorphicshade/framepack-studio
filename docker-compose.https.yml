@@ -20,6 +20,11 @@ services:
       # modify this if you are building the image locally and need a different CUDA version
       args:
         - CUDA_VERSION=12.4.1
+        # Installs SageAttention into the image for faster generation.
+        # Only applies when the image is built locally:
+        #   docker compose -f <this file> up -d --build
+        # A plain 'up' pulls the published image, which has no attention library.
+        - INSTALL_SAGEATTENTION=true
     # modify the tag here if you need a different CUDA version or branch
     image: colinurbs/fp-studio:cuda12.4-latest-develop
     restart: unless-stopped

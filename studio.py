@@ -314,6 +314,18 @@ def get_cached_or_encode_prompt(prompt, text_encoder, text_encoder_2, tokenizer,
         # Return embeddings already on the target device (as encode_prompt_conds uses the model's device)
         return llama_vec, llama_attention_mask, clip_l_pooler
 
+def count_prompt_tokens(text):
+    """Token count for one prompt section, for the UI's truncation warning.
+
+    encode_prompt_conds() tokenizes the templated prompt with max_length=256 plus
+    the template's crop_start, so 256 tokens is what a section actually gets to
+    use. Counting the raw text against that is close enough to warn on.
+    """
+    if not text:
+        return 0
+    return len(tokenizer(text, add_special_tokens=False).input_ids)
+
+
 def unload_all_models_from_gpu():
     """Move every model back to system RAM and return the VRAM to the driver.
 
@@ -769,6 +781,7 @@ interface = create_interface(
     job_queue=job_queue,
     settings=settings,
     unload_gpu_fn=unload_all_models_from_gpu,
+    token_count_fn=count_prompt_tokens,
     lora_names=lora_names # Explicitly pass the found LoRA names
 )
 

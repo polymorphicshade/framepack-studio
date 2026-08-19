@@ -84,14 +84,13 @@ HTTPS is port 8443, not 7860 — in this stack 7860 is the app's own plain HTTP 
 
 Generation time is dominated by the transformer: `steps` x sections forward passes, plus the cost of streaming the model between CPU and GPU on cards that cannot hold it. The levers below are ordered by how much they typically matter.
 
-**Install an attention library.** `diffusers_helper/models/hunyuan_video_packed.py` picks the fastest backend it can import, in the order SageAttention > Flash Attention > xFormers > PyTorch SDPA, and prints which one it chose at startup. None of them is in `requirements.txt`, so a default install runs on SDPA. SDPA already uses the flash kernel on Ampere and later, so expect a useful gain rather than a dramatic one - SageAttention's INT8 attention is the only one that changes the arithmetic enough to pull clearly ahead:
+**Install an attention library.** `diffusers_helper/models/hunyuan_video_packed.py` picks the fastest backend it can import, in the order SageAttention > Flash Attention > xFormers > PyTorch SDPA, and prints which one it chose at startup. Check that line before tuning anything else - if it says "No attention library found", you are on SDPA. SDPA already uses the flash kernel on Ampere and later, so the gain is useful rather than dramatic; SageAttention's INT8 attention is the one that pulls clearly ahead.
 
-```bash
-pip install triton          # triton-windows on Windows
-pip install sageattention
-```
+Nothing installs these automatically. On Windows, `install.bat` offers SageAttention and/or Flash Attention during setup and installs prebuilt wheels matched to the torch, CUDA and Python versions it just set up - re-run it and pick option 1 or 3 to add them to an existing install. They deliberately stay out of `requirements.txt`, because the right wheel depends on the exact torch/CUDA/Python/OS combination, and a generic `pip install` either fails to build or drags in a torch that replaces the CUDA build the installer pinned.
 
-xFormers is the easy fallback where SageAttention will not build (`pip install xformers`, matched to your torch build). Only one is used; installing several is harmless.
+The Docker image installs SageAttention 1.0.6 itself, right after torch - it is pure Triton, so it needs no CUDA toolkit on the runtime base image. This only applies to an image you build yourself (`docker compose up -d --build`); a plain `up` pulls the published image, which has no attention library. Build with `--build-arg INSTALL_SAGEATTENTION=false` to skip it.
+
+**Queue jobs on one model back to back.** A job reuses the transformer already in memory when it wants the same model as the job before it, so a run of generations on one model loads it once. Switching model type between jobs, or letting the idle unload run, means the next job reloads it.
 
 **Keep more of the transformer resident.** The model is bf16 and larger than 24GB, so on a 24GB card it is streamed layer by layer every section. **GPU Memory Preservation** in the Settings tab is how much VRAM is left free when loading it - lower means more layers stay on the GPU and less is copied over PCIe each section. 6GB is the safe default; on a 24GB card with nothing else running, 4-5GB is usually still safe and measurably faster. Back it off if you hit OOM at your resolution. Note the offload that runs before VAE decoding frees to a fixed 8GB regardless of this setting, so it only affects the sampling phase.
 
