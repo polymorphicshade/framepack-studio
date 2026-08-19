@@ -18,7 +18,7 @@ FramePack Studio is an AI video generation application based on FramePack that s
 - **Timestamped Prompts**: Define different prompts for specific time segments in your video
 - **Prompt Blending**: Define the blending time between timestamped prompts
 - **LoRA Support**: Works with most (all?) Hunyuan Video LoRAs
-- **Queue System**: Process multiple generation jobs without blocking the interface. Import and export queues.
+- **Queue System**: Process multiple generation jobs without blocking the interface. Import and export queues. Set **Generations per queue submission** above 1 to enqueue several takes of the same inputs at once, each with its own random seed.
 - **Metadata Saving/Import**: Prompt and seed are encoded into the output PNG, all other generation metadata is saved in a JSON file that can be imported later for similar generations.
 - **Custom Presets**: Allow quick switching between named groups of parameters. A custom Startup Preset can also be set.
 - **I2V and T2V**: Works with or without an input image to allow for more flexibility when working with standard Hunyuan Video LoRAs

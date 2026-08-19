@@ -971,6 +971,14 @@ def create_interface(
                             value=settings.get("clean_up_videos", True),
                             info="If checked, only the final video will be kept after generation."
                         )
+                        num_generations = gr.Number(
+                            label="Generations per queue submission",
+                            value=settings.get("num_generations", 1),
+                            precision=0,
+                            minimum=1,
+                            maximum=100,
+                            info="How many jobs each 'Add to Queue' enqueues. Above 1, the extra jobs reuse every input but get a fresh random seed, so you get that many variations of the same idea."
+                        )
                         intermediate_video_interval = gr.Slider(
                             label="Intermediate video interval (sections)",
                             minimum=0,
@@ -1088,7 +1096,7 @@ def create_interface(
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val, num_generations_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1120,7 +1128,8 @@ def create_interface(
                                     startup_preset_name=startup_preset_name_val,
                                     ssl_certfile=ssl_certfile_val or None,
                                     ssl_keyfile=ssl_keyfile_val or None,
-                                    intermediate_video_interval=int(intermediate_video_interval_val)
+                                    intermediate_video_interval=int(intermediate_video_interval_val),
+                                    num_generations=max(1, int(num_generations_val or 1))
                                 )
                                 # settings.save_settings() is called inside settings.save_settings if auto_save is true,
                                 # but for the manual button, we ensure it saves regardless of the auto_save flag's previous state.
@@ -1157,7 +1166,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval, num_generations],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1194,6 +1203,7 @@ def create_interface(
                         mp4_crf.change(lambda v: handle_individual_setting_change("mp4_crf", v, "MP4 Compression"), inputs=[mp4_crf], outputs=[status])
                         clean_up_videos.change(lambda v: handle_individual_setting_change("clean_up_videos", v, "Clean Up Videos"), inputs=[clean_up_videos], outputs=[status])
                         intermediate_video_interval.change(lambda v: handle_individual_setting_change("intermediate_video_interval", int(v), "Intermediate Video Interval"), inputs=[intermediate_video_interval], outputs=[status])
+                        num_generations.change(lambda v: handle_individual_setting_change("num_generations", max(1, int(v or 1)), "Generations per Submission"), inputs=[num_generations], outputs=[status])
 
                         # NEW: auto-cleanup temp files on startup checkbox
                         auto_cleanup_on_startup.change(lambda v: handle_individual_setting_change("auto_cleanup_on_startup", v, "Auto Cleanup on Startup"), inputs=[auto_cleanup_on_startup], outputs=[status])
@@ -1362,19 +1372,41 @@ def create_interface(
             # Use the current seed value as is for this job
             # Call the process function with all arguments
             # Pass the backend_model_type and the ORIGINAL prompt_text string to the backend process function
-            result = process_fn(backend_model_type, input_data, actual_end_frame_image_for_backend, actual_end_frame_strength_for_backend,
-                                prompt_text_arg, n_prompt_arg, seed_arg, total_second_length_arg,
-                                latent_window_size_arg, steps_arg, cfg_arg, gs_arg, rs_arg,
-                                cache_type_arg == 'TeaCache', teacache_num_steps_arg, teacache_rel_l1_thresh_arg,
-                                cache_type_arg == 'MagCache', magcache_threshold_arg, magcache_max_consecutive_skips_arg, magcache_retention_ratio_arg,
-                                blend_sections_arg, latent_type_arg, clean_up_videos_arg, # clean_up_videos_arg is from UI
-                                selected_loras_arg, resolutionW_arg, resolutionH_arg, 
-                                input_image_path, 
-                                combine_with_source_arg,
-                                num_cleaned_frames_arg,
-                                lora_names_states_arg,
-                                *lora_slider_values_tuple
-                               )
+            def queue_one_job(job_seed):
+                return process_fn(backend_model_type, input_data, actual_end_frame_image_for_backend, actual_end_frame_strength_for_backend,
+                                  prompt_text_arg, n_prompt_arg, job_seed, total_second_length_arg,
+                                  latent_window_size_arg, steps_arg, cfg_arg, gs_arg, rs_arg,
+                                  cache_type_arg == 'TeaCache', teacache_num_steps_arg, teacache_rel_l1_thresh_arg,
+                                  cache_type_arg == 'MagCache', magcache_threshold_arg, magcache_max_consecutive_skips_arg, magcache_retention_ratio_arg,
+                                  blend_sections_arg, latent_type_arg, clean_up_videos_arg, # clean_up_videos_arg is from UI
+                                  selected_loras_arg, resolutionW_arg, resolutionH_arg,
+                                  input_image_path,
+                                  combine_with_source_arg,
+                                  num_cleaned_frames_arg,
+                                  lora_names_states_arg,
+                                  *lora_slider_values_tuple
+                                 )
+
+            result = queue_one_job(seed_arg)
+
+            # The num_generations setting queues repeats of this job, identical apart
+            # from a fresh random seed each, so one submission yields several takes on
+            # the same idea. The first job keeps the seed shown in the UI.
+            try:
+                num_generations_setting = int(settings.get("num_generations", 1))
+            except (TypeError, ValueError):
+                num_generations_setting = 1
+            num_generations_setting = max(1, num_generations_setting)
+
+            extra_jobs_queued = 0
+            for _ in range(num_generations_setting - 1):
+                extra_seed = random.randint(0, 21474)
+                extra_result = queue_one_job(extra_seed)
+                if extra_result and extra_result[1]:
+                    extra_jobs_queued += 1
+                    print(f"Queued additional generation {extra_jobs_queued + 1}/{num_generations_setting} with seed {extra_seed}")
+                else:
+                    print(f"Failed to queue additional generation with seed {extra_seed}")
             # If randomize_seed is checked, generate a new random seed for the next job
             new_seed_value = None
             if randomize_seed_arg:
@@ -1392,14 +1424,18 @@ def create_interface(
                 # Call update_stats again AFTER the job is added to get the freshest stats
                 queue_status_data, queue_stats_text = update_stats()
 
+                queued_message = result[4]
+                if extra_jobs_queued:
+                    queued_message = f'Added {extra_jobs_queued + 1} jobs to queue. First job ID: {job_id}'
+
 
                 # Add the new seed value to the results if randomize is checked
                 if new_seed_value is not None:
                     # Use result[6] directly for end_button to preserve its value. Add gr.update() for video_input_required_message.
-                    return [result[0], job_id, result[2], result[3], result[4], start_button_update_after_add, result[6], queue_status_data, queue_stats_text, new_seed_value, gr.update()]
+                    return [result[0], job_id, result[2], result[3], queued_message, start_button_update_after_add, result[6], queue_status_data, queue_stats_text, new_seed_value, gr.update()]
                 else:
                     # Use result[6] directly for end_button to preserve its value. Add gr.update() for video_input_required_message.
-                    return [result[0], job_id, result[2], result[3], result[4], start_button_update_after_add, result[6], queue_status_data, queue_stats_text, gr.update(), gr.update()]
+                    return [result[0], job_id, result[2], result[3], queued_message, start_button_update_after_add, result[6], queue_status_data, queue_stats_text, gr.update(), gr.update()]
 
             # If no job ID was created, still return the new seed if randomize is checked
             # Also, ensure we return the latest stats even if no job was created (e.g., error during param validation)

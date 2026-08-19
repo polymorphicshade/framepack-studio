@@ -29,6 +29,10 @@ class Settings:
             # Each intermediate re-encodes the whole clip so far and, with
             # clean_up_videos on, is deleted at the end anyway.
             "intermediate_video_interval": 1,
+            # How many jobs one "Add to Queue" enqueues. Above 1, the extra jobs
+            # repeat the same inputs with a fresh random seed each, to get
+            # variations of one idea without resubmitting by hand.
+            "num_generations": 1,
             "override_system_prompt": False,
             "auto_cleanup_on_startup": False, # ADDED: New setting for startup cleanup
             "latents_display_top": False, # NEW: Control latents preview position (False = right column, True = top of interface)
