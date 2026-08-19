@@ -536,11 +536,10 @@ def create_interface(
 
                             with gr.Accordion("Prompt Parameters", open=False):
                                 n_prompt = gr.Textbox(
-                                    label="Negative Prompt (needs CFG Scale above 1.0)",
+                                    label="Negative Prompt (ignored at CFG Scale 1.0)",
                                     value="",
                                     visible=True,
-                                    interactive=False,
-                                    info="At CFG Scale 1.0 the negative prompt is skipped entirely, so this box does nothing. Raise CFG Scale above 1.0 to enable it - that adds a second model pass per step and roughly doubles generation time."
+                                    info="At CFG Scale 1.0 the sampler skips the negative pass, so whatever is here has no effect. Raise CFG Scale above 1.0 to apply it - that adds a second model pass per step and roughly doubles generation time."
                                 )  # Make visible for both models
 
                                 blend_sections = gr.Slider(
@@ -1744,12 +1743,13 @@ def create_interface(
         )
 
         # The negative prompt is only consulted when CFG Scale is above 1.0; at
-        # 1.0 the sampler skips the pass altogether, so the box is disabled to
-        # stop people typing into a control that cannot do anything.
+        # 1.0 the sampler skips the pass altogether. The box stays editable
+        # either way - write the prompt first, raise CFG after - so the label
+        # carries the warning instead.
         def update_negative_prompt_state(cfg_value):
             if cfg_value and float(cfg_value) > 1.0:
-                return gr.update(interactive=True, label="Negative Prompt")
-            return gr.update(interactive=False, label="Negative Prompt (needs CFG Scale above 1.0)")
+                return gr.update(label="Negative Prompt")
+            return gr.update(label="Negative Prompt (ignored at CFG Scale 1.0)")
 
         cfg.change(
             fn=update_negative_prompt_state,
