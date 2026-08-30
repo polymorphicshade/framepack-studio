@@ -23,6 +23,14 @@ class Settings:
             "auto_save_settings": True,
             "gradio_theme": "default",
             "mp4_crf": 16,
+            # Frames per second of the finished video, and the rate the frame
+            # budget is worked out from. The model produces a fixed amount of
+            # movement per frame, so this doubles as the motion-speed control:
+            # above 30 the same motion is played through faster (and the extra
+            # frames cost proportionally more to generate), below 30 slower.
+            # 30 is what FramePack was built around - leave it there unless the
+            # motion is the thing you want to change.
+            "output_fps": 30,
             "clean_up_videos": True,
             # How often to write the in-progress video. 1 = after every section (a
             # preview per section), N = every Nth section, 0 = only the final video.

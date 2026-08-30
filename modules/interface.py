@@ -92,7 +92,7 @@ def create_interface(
 
 
     # Get section boundaries and quick prompts
-    section_boundaries = get_section_boundaries()
+    section_boundaries = get_section_boundaries(fps=int(settings.get("output_fps", 30)))
     quick_prompts = get_quick_prompts()
 
     # --- Function to update queue stats (Moved earlier to resolve UnboundLocalError) ---
@@ -1011,6 +1011,14 @@ def create_interface(
                             value=settings.get("mp4_crf", 16),
                             info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs."
                         )
+                        output_fps = gr.Slider(
+                            label="Output FPS (motion speed)",
+                            minimum=10,
+                            maximum=60,
+                            step=1,
+                            value=settings.get("output_fps", 30),
+                            info="Frames per second of the finished video. The model produces a fixed amount of movement per frame, so this is also the motion-speed control: above 30 the same motion plays through faster, below 30 slower. Video length in seconds is unchanged either way - raising this generates proportionally more frames, so it costs proportionally more time. 30 is what FramePack was built around."
+                        )
                         clean_up_videos = gr.Checkbox(
                             label="Clean up video files",
                             value=settings.get("clean_up_videos", True),
@@ -1147,7 +1155,7 @@ def create_interface(
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val, num_generations_val, unload_models_when_idle_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, output_fps_val, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val, ssl_certfile_val, ssl_keyfile_val, intermediate_video_interval_val, num_generations_val, unload_models_when_idle_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1180,6 +1188,7 @@ def create_interface(
                                     ssl_certfile=ssl_certfile_val or None,
                                     ssl_keyfile=ssl_keyfile_val or None,
                                     intermediate_video_interval=int(intermediate_video_interval_val),
+                                    output_fps=int(output_fps_val),
                                     num_generations=max(1, int(num_generations_val or 1)),
                                     unload_models_when_idle=unload_models_when_idle_val
                                 )
@@ -1218,7 +1227,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval, num_generations, unload_models_when_idle],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, output_fps, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown, ssl_certfile, ssl_keyfile, intermediate_video_interval, num_generations, unload_models_when_idle],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1291,6 +1300,7 @@ def create_interface(
                         mp4_crf.change(lambda v: handle_individual_setting_change("mp4_crf", v, "MP4 Compression"), inputs=[mp4_crf], outputs=[status])
                         clean_up_videos.change(lambda v: handle_individual_setting_change("clean_up_videos", v, "Clean Up Videos"), inputs=[clean_up_videos], outputs=[status])
                         intermediate_video_interval.change(lambda v: handle_individual_setting_change("intermediate_video_interval", int(v), "Intermediate Video Interval"), inputs=[intermediate_video_interval], outputs=[status])
+                        output_fps.change(lambda v: handle_individual_setting_change("output_fps", int(v), "Output FPS"), inputs=[output_fps], outputs=[status])
                         num_generations.change(lambda v: handle_individual_setting_change("num_generations", max(1, int(v or 1)), "Generations per Submission"), inputs=[num_generations], outputs=[status])
                         unload_models_when_idle.change(lambda v: handle_individual_setting_change("unload_models_when_idle", v, "Unload Models When Idle"), inputs=[unload_models_when_idle], outputs=[status])
 
@@ -1754,6 +1764,7 @@ def create_interface(
                     prompt_text or "",
                     latent_window_size=int(window_size) if window_size else 9,
                     token_count_fn=token_count_fn,
+                    fps=int(settings.get("output_fps", 30)),
                 )
             except Exception as e:
                 print(f"Prompt lint failed: {e}")

@@ -57,7 +57,7 @@ def snap_to_section_boundaries(prompt_sections: List[PromptSection], latent_wind
     return aligned_sections
 
 
-def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_window_size: int = 9, generation_type: str = "Original") -> List[PromptSection]:
+def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_window_size: int = 9, generation_type: str = "Original", fps: int = 30) -> List[PromptSection]:
     """
     Parse a prompt with timestamps in the format [0s-2s: text] or [3s: text]
     
@@ -66,6 +66,9 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
         total_duration: Total duration of the video in seconds
         latent_window_size: Size of the latent window used in the model
         generation_type: Type of generation ("Original" or "F1")
+        fps: Frames per second the section grid is derived from. Must match the
+             rate the video is generated and encoded at, or timestamps in the
+             prompt land on the wrong sections.
         
     Returns:
         List of PromptSection objects with timestamps aligned to section boundaries
@@ -120,7 +123,7 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
         sections[-1].end_time = total_duration
     
     # Snap timestamps to section boundaries
-    sections = snap_to_section_boundaries(sections, latent_window_size)
+    sections = snap_to_section_boundaries(sections, latent_window_size, fps)
     
     # Only reverse timestamps for Original generation type
     if generation_type in ("Original", "Original with Endframe", "Video"):
@@ -142,18 +145,19 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
     return sections
 
 
-def get_section_boundaries(latent_window_size: int = 9, count: int = 10) -> str:
+def get_section_boundaries(latent_window_size: int = 9, count: int = 10, fps: int = 30) -> str:
     """
     Calculate and format section boundaries for UI display
     
     Args:
         latent_window_size: Size of the latent window used in the model
         count: Number of boundaries to display
+        fps: Frames per second the section grid is derived from
         
     Returns:
         Formatted string of section boundaries
     """
-    section_duration = (latent_window_size * 4 - 3) / 30
+    section_duration = (latent_window_size * 4 - 3) / fps
     return ", ".join([f"{i*section_duration:.1f}s" for i in range(count)])
 
 

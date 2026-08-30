@@ -131,7 +131,14 @@ def worker(
     
     stream_to_use = job_stream if job_stream is not None else stream
 
-    total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
+    # Frames per second of the output, and the rate the frame budget is worked
+    # out from. Both have to be the same number or "Video Length (Seconds)" stops
+    # meaning seconds. The model's motion per frame is fixed, so raising this
+    # plays that motion through faster at the same requested duration, at the
+    # cost of proportionally more sections to generate.
+    output_fps = int(settings.get("output_fps", 30))
+
+    total_latent_sections = (total_second_length * output_fps) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
     # --- Total progress tracking ---
@@ -141,7 +148,7 @@ def worker(
 
     # Parse the timestamped prompt with boundary snapping and reversing
     # prompt_text should now be the original string from the job queue
-    prompt_sections = parse_timestamped_prompt(prompt_text, total_second_length, latent_window_size, model_type)
+    prompt_sections = parse_timestamped_prompt(prompt_text, total_second_length, latent_window_size, model_type, output_fps)
     job_id = generate_timestamp()
 
     # Initialize progress data with a clear starting message and dummy preview
@@ -225,6 +232,7 @@ def worker(
             'end_frame_image_path': end_frame_image_path,
             'combine_with_source': combine_with_source,
             'num_cleaned_frames': num_cleaned_frames,
+            'output_fps': output_fps,
             'save_metadata_checked': save_metadata_checked # Ensure it's in job_params for internal use
         }
         
@@ -635,13 +643,13 @@ def worker(
             # For Video model, add the input video frame count when calculating current position
             if model_type == "Video":
                 # Calculate the time position including the input video frames
-                input_video_time = input_video_frame_count * 4 / 30  # Convert latent frames to time
-                current_pos = input_video_time + (total_generated_latent_frames * 4 - 3) / 30
+                input_video_time = input_video_frame_count * 4 / output_fps  # Convert latent frames to time
+                current_pos = input_video_time + (total_generated_latent_frames * 4 - 3) / output_fps
                 # Original position is the remaining time to generate
-                original_pos = total_second_length - (total_generated_latent_frames * 4 - 3) / 30
+                original_pos = total_second_length - (total_generated_latent_frames * 4 - 3) / output_fps
             else:
                 # For other models, calculate as before
-                current_pos = (total_generated_latent_frames * 4 - 3) / 30
+                current_pos = (total_generated_latent_frames * 4 - 3) / output_fps
                 original_pos = total_second_length - current_pos
             
             # Ensure positions are not negative
@@ -719,13 +727,13 @@ def worker(
             # Calculate the current time position
             if model_type == "Video":
                 # For Video model, add the input video time to the current position
-                input_video_time = input_video_frame_count * 4 / 30  # Convert latent frames to time
-                current_time_position = (total_generated_latent_frames * 4 - 3) / 30  # in seconds
+                input_video_time = input_video_frame_count * 4 / output_fps  # Convert latent frames to time
+                current_time_position = (total_generated_latent_frames * 4 - 3) / output_fps  # in seconds
                 if current_time_position < 0:
                     current_time_position = 0.01
             else:
                 # For other models, calculate as before
-                current_time_position = (total_generated_latent_frames * 4 - 3) / 30  # in seconds
+                current_time_position = (total_generated_latent_frames * 4 - 3) / output_fps  # in seconds
                 if current_time_position < 0:
                     current_time_position = 0.01
 
@@ -938,7 +946,7 @@ def worker(
 
             if is_last_section or write_intermediate:
                 output_filename = os.path.join(output_dir, f'{job_id}_{total_generated_latent_frames}.mp4')
-                save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=settings.get("mp4_crf"))
+                save_bcthw_as_mp4(history_pixels, output_filename, fps=output_fps, crf=settings.get("mp4_crf"))
                 print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
                 stream_to_use.output_queue.push(('file', output_filename))
             else:
