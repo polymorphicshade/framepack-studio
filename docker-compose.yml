@@ -13,7 +13,7 @@ services:
     image: colinurbs/fp-studio:cuda12.4-latest-develop
     restart: unless-stopped
     ports:
-      - "${PORT:-8005}:8005"
+      - "${PORT:-8005}:7860"
     volumes:
       - "./loras:/app/loras"
       - "./outputs:/app/outputs"

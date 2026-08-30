@@ -166,14 +166,21 @@ def create_metadata(job_params, job_id, settings, save_placeholder=False):
         metadata.add_text("x_param", job_params.get('x_param', ''))
         metadata.add_text("y_param", job_params.get('y_param', ''))
     
-    # Determine end_frame_used value safely (avoiding NumPy array boolean ambiguity)
-    end_frame_image = job_params.get('end_frame_image')
-    end_frame_used = False
-    if end_frame_image is not None:
-        if isinstance(end_frame_image, np.ndarray):
-            end_frame_used = end_frame_image.any()  # True if any element is non-zero
-        else:
-            end_frame_used = True
+    # Determine end_frame_used value safely (avoiding NumPy array boolean ambiguity).
+    # A finished job drops its end frame array once the PNG is on disk, and records
+    # what the array said in 'end_frame_used' first - so prefer that when present,
+    # or re-serializing an old job would silently downgrade it to False.
+    recorded_end_frame_used = job_params.get('end_frame_used')
+    if recorded_end_frame_used is not None:
+        end_frame_used = bool(recorded_end_frame_used)
+    else:
+        end_frame_image = job_params.get('end_frame_image')
+        end_frame_used = False
+        if end_frame_image is not None:
+            if isinstance(end_frame_image, np.ndarray):
+                end_frame_used = end_frame_image.any()  # True if any element is non-zero
+            else:
+                end_frame_used = True
     
     # Create comprehensive JSON metadata with all possible parameters
     # This is created before file saving logic that might use it (e.g. JSON dump)

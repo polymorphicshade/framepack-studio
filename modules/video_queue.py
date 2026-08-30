@@ -916,12 +916,14 @@ class VideoJobQueue:
         """Drop a finished job's in-memory scratch data.
 
         Jobs stay in self.jobs until the user clears them, so anything left
-        hanging off a finished job is held for the rest of the session. Two
-        things here are large and useless once the job is done: the last
-        preview frame in progress_data, and the job's AsyncStream, which on a
-        cancel still holds every progress tuple the worker pushed after the
-        reader stopped draining it. The text and HTML of the last progress
-        update are kept - they are small and the UI still shows them.
+        hanging off a finished job is held for the rest of the session: the
+        last preview frame, the job's AsyncStream, and full-resolution copies
+        of the input and end frames. All of it is either dead or already on
+        disk by the time a job reaches a terminal state.
+
+        Only call this on a finished job - a RUNNING one still needs its
+        params, and the interrupted-job resume path in _worker_loop restarts
+        exactly those.
         """
         stream = getattr(job, "stream", None)
         if stream is not None:
@@ -933,8 +935,35 @@ class VideoJobQueue:
             stream.output_queue.clear()
             job.stream = None
 
+        # The preview frame is dead once the job stops; desc and html are small
+        # and the UI still shows them.
         if isinstance(job.progress_data, dict):
             job.progress_data.pop('preview', None)
+
+        # input_image / end_frame_image are full-resolution arrays copied per job
+        # in studio.process(). Once saved to queue_images/ they are redundant -
+        # load_queue_from_json reads them back from those PNGs. Strings are left
+        # alone: for the Video model input_image is a path, not an array, and
+        # create_metadata and cleanup_orphaned_videos both still need it.
+        self._drop_saved_image_param(job, 'end_frame_image', job.end_frame_image_saved,
+                                     f"{job.id}_end_frame.png")
+        self._drop_saved_image_param(job, 'input_image', job.input_image_saved,
+                                     f"{job.id}_input.png")
+        if not isinstance(job.input_image, str):
+            job.input_image = None  # duplicate reference kept by Job.__post_init__
+
+    def _drop_saved_image_param(self, job, key, saved_flag, filename):
+        """Release job.params[key] if it is an array already written to disk."""
+        image = job.params.get(key)
+        if not isinstance(image, np.ndarray):
+            return
+        if not (saved_flag and os.path.exists(os.path.join("queue_images", filename))):
+            return  # not persisted yet - dropping it would lose it for good
+
+        if key == 'end_frame_image' and 'end_frame_used' not in job.params:
+            # create_metadata derives this from the array, so record it first.
+            job.params['end_frame_used'] = bool(image.any())
+        job.params[key] = None
     
     def export_queue_to_zip(self, output_path=None):
         """Export the current queue to a zip file containing queue.json and queue_images directory
@@ -1486,10 +1515,10 @@ class VideoJobQueue:
                     
                     # Clean up params for the worker function
                     worker_params = job.params.copy()
-                    if 'end_frame_image_original' in worker_params:
-                        del worker_params['end_frame_image_original']
-                    if 'end_frame_strength_original' in worker_params:
-                        del worker_params['end_frame_strength_original']
+                    for bookkeeping_key in ('end_frame_image_original',
+                                            'end_frame_strength_original',
+                                            'end_frame_used'):
+                        worker_params.pop(bookkeeping_key, None)
 
                     async_run(
                         self.worker_function,
