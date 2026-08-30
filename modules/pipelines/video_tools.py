@@ -4,7 +4,7 @@ import numpy as np
 import traceback
 from PIL import Image
 
-from diffusers_helper.utils import save_bcthw_as_mp4
+from diffusers_helper.utils import save_bcthw_as_mp4, bcthw_to_uint8
 
 @torch.no_grad()
 def combine_videos_sequentially_from_tensors(processed_input_frames_np,
@@ -18,8 +18,9 @@ def combine_videos_sequentially_from_tensors(processed_input_frames_np,
 
     Args:
         processed_input_frames_np: NumPy array of processed input frames (T_in, H, W_in, C), uint8.
-        generated_frames_pt: PyTorch tensor of generated frames (B_gen, C_gen, T_gen, H, W_gen), float32 [-1,1].
-                             (This will be history_pixels from worker.py)
+        generated_frames_pt: PyTorch tensor of generated frames (B_gen, C_gen, T_gen, H, W_gen).
+                             uint8 [0,255], as history_pixels now arrives from worker.py,
+                             or float32 [-1,1] - either is accepted.
         output_path: Path to save the combined video.
         target_fps: FPS for the output combined video.
         crf_value: CRF value for video encoding.
@@ -28,13 +29,18 @@ def combine_videos_sequentially_from_tensors(processed_input_frames_np,
         Path to the combined video, or None if an error occurs.
     """
     try:
-        # 1. Convert processed_input_frames_np to PyTorch tensor BCTHW, float32, [-1,1]
+        # 1. Convert both sides to BCTHW uint8 [0,255] - the input frames already
+        # are uint8, so matching them avoids inflating a long clip to float32 just
+        # to concatenate it. (Casting the old float [-1,1] form straight to uint8
+        # would clamp every negative value to 0, so convert, don't cast.)
+        generated_frames_pt = bcthw_to_uint8(generated_frames_pt)
+
         # processed_input_frames_np shape: (T_in, H, W_in, C)
-        input_frames_pt = torch.from_numpy(processed_input_frames_np).float() / 127.5 - 1.0 # (T,H,W,C)
+        input_frames_pt = torch.from_numpy(processed_input_frames_np) # (T,H,W,C) uint8
         input_frames_pt = input_frames_pt.permute(3, 0, 1, 2) # (C,T,H,W)
         input_frames_pt = input_frames_pt.unsqueeze(0) # (1,C,T,H,W) -> BCTHW
 
-        # Ensure generated_frames_pt is on the same device and dtype for concatenation
+        # Ensure both sides match for concatenation
         input_frames_pt = input_frames_pt.to(device=generated_frames_pt.device, dtype=generated_frames_pt.dtype)
 
         # 2. Dimension Check (Heights and Widths should match)

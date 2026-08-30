@@ -249,18 +249,62 @@ def uniform_random_by_intervals(inclusive, exclusive, n, round_to_int=False):
     return numbers.tolist()
 
 
+# Frames converted per pass in the helpers below. The point of the chunking is to
+# keep the scratch space proportional to the chunk instead of the whole clip, so
+# a long video costs no more peak memory per frame than a short one.
+FRAME_CHUNK = 32
+
+
+def bcthw_to_uint8(x, chunk=FRAME_CHUNK):
+    """BCTHW float in [-1, 1] -> BCTHW uint8 in [0, 255], a chunk of frames at a time.
+
+    The obvious one-liner (clamp, scale, cast) holds two or three float32 copies
+    of the entire clip alive at once. At 640x640 a float32 frame is 4.9 MB, so a
+    60 second clip is ~9 GB per copy - which is what made long generations die.
+    Converting in slices keeps the overhead to one chunk, and the result is a
+    quarter the size of the float32 tensor it replaces.
+
+    Already-uint8 input is returned unchanged, so callers can pass either.
+    """
+    if x.dtype == torch.uint8:
+        return x
+
+    b, c, t, h, w = x.shape
+    out = torch.empty((b, c, t, h, w), dtype=torch.uint8, device=x.device)
+    for i in range(0, t, chunk):
+        piece = x[:, :, i:i + chunk].detach().float()
+        out[:, :, i:i + chunk] = (torch.clamp(piece, -1., 1.) * 127.5 + 127.5).to(torch.uint8)
+    return out
+
+
 def soft_append_bcthw(history, current, overlap=0):
     if overlap <= 0:
         return torch.cat([history, current], dim=2)
 
     assert history.shape[2] >= overlap, f"History length ({history.shape[2]}) must be >= overlap ({overlap})"
     assert current.shape[2] >= overlap, f"Current length ({current.shape[2]}) must be >= overlap ({overlap})"
-    
-    weights = torch.linspace(1, 0, overlap, dtype=history.dtype, device=history.device).view(1, 1, -1, 1, 1)
-    blended = weights * history[:, :, -overlap:] + (1 - weights) * current[:, :, :overlap]
-    output = torch.cat([history[:, :, :-overlap], blended, current[:, :, overlap:]], dim=2)
+    assert history.dtype == current.dtype, f"dtype mismatch: history {history.dtype}, current {current.dtype}"
 
-    return output.to(history)
+    # Write straight into the output instead of torch.cat-ing a list of pieces:
+    # same result, but the blended seam is the only temporary, and history may be
+    # uint8, which is what keeps a long clip affordable.
+    head = history.shape[2] - overlap
+    output = torch.empty(
+        history.shape[:2] + (head + current.shape[2],) + history.shape[3:],
+        dtype=history.dtype, device=history.device,
+    )
+    output[:, :, :head] = history[:, :, :-overlap]
+
+    # The crossfade ramp is fractional, so blend in float whatever the storage
+    # dtype - in uint8 the weights would collapse to 0 and 1 and the seam would
+    # become a hard cut.
+    weights = torch.linspace(1, 0, overlap, dtype=torch.float32, device=history.device).view(1, 1, -1, 1, 1)
+    blended = weights * history[:, :, -overlap:].float() + (1 - weights) * current[:, :, :overlap].float()
+    output[:, :, head:head + overlap] = blended.to(history.dtype)
+    del blended
+
+    output[:, :, head + overlap:] = current[:, :, overlap:]
+    return output
 
 
 def save_bcthw_as_mp4(x, output_filename, fps=10, crf=0):
@@ -273,11 +317,19 @@ def save_bcthw_as_mp4(x, output_filename, fps=10, crf=0):
             break
 
     os.makedirs(os.path.dirname(os.path.abspath(os.path.realpath(output_filename))), exist_ok=True)
-    x = torch.clamp(x.float(), -1., 1.) * 127.5 + 127.5
-    x = x.detach().cpu().to(torch.uint8)
-    x = einops.rearrange(x, '(m n) c t h w -> t (m h) (n w) c', n=per_row)
-    torchvision.io.write_video(output_filename, x, fps=fps, video_codec='libx264', options={'crf': str(int(crf))})
-    return x
+
+    # Lay the frames out one chunk at a time into a single uint8 buffer. Doing the
+    # whole clip in one expression needed several float32 copies of it live at
+    # once; this needs the uint8 result plus one chunk. uint8 input passes through.
+    rows = b // per_row
+    frames = torch.empty((t, rows * h, per_row * w, c), dtype=torch.uint8)
+    for i in range(0, t, FRAME_CHUNK):
+        piece = bcthw_to_uint8(x[:, :, i:i + FRAME_CHUNK].detach().cpu())
+        frames[i:i + piece.shape[2]] = einops.rearrange(
+            piece, '(m n) c t h w -> t (m h) (n w) c', n=per_row)
+
+    torchvision.io.write_video(output_filename, frames, fps=fps, video_codec='libx264', options={'crf': str(int(crf))})
+    return frames
 
 
 def save_bcthw_as_png(x, output_filename):

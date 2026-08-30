@@ -9,7 +9,7 @@ import datetime
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from diffusers_helper.models.mag_cache import MagCache
-from diffusers_helper.utils import save_bcthw_as_mp4, generate_timestamp, resize_and_center_crop
+from diffusers_helper.utils import save_bcthw_as_mp4, bcthw_to_uint8, generate_timestamp, resize_and_center_crop
 from diffusers_helper.memory import cpu, gpu, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, unload_complete_models, load_model_as_complete
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.gradio.progress_bar import make_progress_bar_html
@@ -902,14 +902,20 @@ def worker(
             # Get real history latents using the generator
             real_history_latents = studio_module.current_generator.get_real_history_latents(history_latents, total_generated_latent_frames)
 
+            # Keep the assembled clip as uint8. The VAE hands back float32, which
+            # is four times the size for no benefit - every consumer downstream
+            # (the mp4 encoder, the combine-with-source path) ends at uint8
+            # anyway, and holding the whole clip in float32 is what put a ceiling
+            # on how long a video could get.
             if history_pixels is None:
-                history_pixels = vae_decode(real_history_latents, vae).cpu()
+                history_pixels = bcthw_to_uint8(vae_decode(real_history_latents, vae).cpu())
             else:
                 section_latent_frames = (latent_window_size * 2 + 1) if model_type in ("Original", "Original with Endframe") and has_input_image and is_last_section else studio_module.current_generator.get_section_latent_frames(latent_window_size, is_last_section)
                 overlapped_frames = latent_window_size * 4 - 3
 
                 # Get current pixels using the generator
-                current_pixels = studio_module.current_generator.get_current_pixels(real_history_latents, section_latent_frames, vae)
+                current_pixels = bcthw_to_uint8(
+                    studio_module.current_generator.get_current_pixels(real_history_latents, section_latent_frames, vae))
                 
                 # Update history pixels using the generator
                 history_pixels = studio_module.current_generator.update_history_pixels(history_pixels, current_pixels, overlapped_frames)
@@ -1125,7 +1131,7 @@ def worker(
                     input_files_dir=job_params['input_files_dir']
                 )
 
-                # history_pixels is (B, C, T, H, W), float32, [-1,1], on CPU
+                # history_pixels is (B, C, T, H, W) uint8 [0,255] on CPU
                 if input_frames_resized_np is not None and history_pixels.numel() > 0 : # Check if history_pixels is not empty
                     combined_sequential_output_filename = os.path.join(output_dir, f'{job_id}_combined.mp4')
                     
