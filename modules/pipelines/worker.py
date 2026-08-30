@@ -162,22 +162,17 @@ def worker(
         except Exception as e:
             print(f"Error storing initial progress data: {e}")
     
-    # Push initial progress update to both streams
+    # Push the initial progress update to this job's stream. When the queue runs
+    # the job that stream is job_stream, drained by VideoJobQueue._worker_loop;
+    # standalone calls with job_stream=None fall back to the module-level stream.
+    # Never mirror into the module-level stream on top of that: nothing reads it,
+    # so the second copy of every update just accumulates for the life of the
+    # process (see the note on the callback push below).
     stream_to_use.output_queue.push(('progress', (dummy_preview, 'Starting job...', make_progress_bar_html(0, 'Starting job...'))))
     
     # Push job ID to stream to ensure monitoring connection
     stream_to_use.output_queue.push(('job_id', job_id))
     stream_to_use.output_queue.push(('monitor_job', job_id))
-    
-    # Always push to the main stream to ensure the UI is updated
-    from __main__ import stream as main_stream
-    if main_stream:  # Always push to main stream regardless of whether it's the same as stream_to_use
-        print(f"Pushing initial progress update to main stream for job {job_id}")
-        main_stream.output_queue.push(('progress', (dummy_preview, 'Starting job...', make_progress_bar_html(0, 'Starting job...'))))
-        
-        # Push job ID to main stream to ensure monitoring connection
-        main_stream.output_queue.push(('job_id', job_id))
-        main_stream.output_queue.push(('monitor_job', job_id))
 
     try:
         # Create a settings dictionary for the pipeline
@@ -678,19 +673,13 @@ def worker(
                 except Exception as e:
                     print(f"Error updating job progress data: {e}")
                     
-            # Always push to the job-specific stream
+            # Push to the job's stream only. This runs once per diffusion step and
+            # `preview` is a whole decoded preview frame, so anything pushed here
+            # and not popped again leaks per step. job_stream is drained by
+            # VideoJobQueue._worker_loop; the module-level stream has no reader at
+            # all, so mirroring progress into it grew the process by a preview
+            # frame every step until the OS killed it mid-session.
             stream_to_use.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, segment_hint) + make_progress_bar_html(total_percentage, total_hint))))
-            
-            # Always push to the main stream to ensure the UI is updated
-            # This is especially important for resumed jobs
-            from __main__ import stream as main_stream
-            if main_stream:  # Always push to main stream regardless of whether it's the same as stream_to_use
-                main_stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, segment_hint) + make_progress_bar_html(total_percentage, total_hint))))
-                
-            # Also push job ID to main stream to ensure monitoring connection
-            if main_stream:
-                main_stream.output_queue.push(('job_id', job_id))
-                main_stream.output_queue.push(('monitor_job', job_id))
 
         # MagCache / TeaCache Initialization Logic
         magcache = None

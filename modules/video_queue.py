@@ -911,6 +911,30 @@ class VideoJobQueue:
             job = self.jobs.get(job_id)
             if job:
                 job.progress_data = progress_data
+
+    def release_job_buffers(self, job):
+        """Drop a finished job's in-memory scratch data.
+
+        Jobs stay in self.jobs until the user clears them, so anything left
+        hanging off a finished job is held for the rest of the session. Two
+        things here are large and useless once the job is done: the last
+        preview frame in progress_data, and the job's AsyncStream, which on a
+        cancel still holds every progress tuple the worker pushed after the
+        reader stopped draining it. The text and HTML of the last progress
+        update are kept - they are small and the UI still shows them.
+        """
+        stream = getattr(job, "stream", None)
+        if stream is not None:
+            # Free the backlog and drop our reference. The worker holds its own
+            # reference and keeps writing until it sees the end signal, so what
+            # it pushes after this dies with it. input_queue is deliberately left
+            # alone: a cancel puts 'end' in there and the worker only peeks at
+            # it, so clearing it would strand a cancelled job mid-generation.
+            stream.output_queue.clear()
+            job.stream = None
+
+        if isinstance(job.progress_data, dict):
+            job.progress_data.pop('preview', None)
     
     def export_queue_to_zip(self, output_path=None):
         """Export the current queue to a zip file containing queue.json and queue_images directory
@@ -1556,6 +1580,15 @@ class VideoJobQueue:
                     
                     print(f"Finishing job {job_id} with status {job.status}")
                     self.is_processing = False
+
+                    # The job stays in self.jobs for the queue table, so release
+                    # its preview frame and stream now rather than holding them
+                    # until the user clears completed jobs.
+                    try:
+                        with self.lock:
+                            self.release_job_buffers(job)
+                    except Exception as e:
+                        print(f"Error releasing buffers for job {job_id}: {e}")
                     
                     # Check if there's another job in the queue before setting current_job to None
                     # This helps prevent UI flashing when a job is cancelled

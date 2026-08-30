@@ -69,6 +69,10 @@ class FIFOQueue:
 
             time.sleep(0.001)
 
+    def clear(self):
+        with self.lock:
+            self.queue.clear()
+
 
 class AsyncStream:
     def __init__(self):
