@@ -475,6 +475,14 @@ def create_interface(
                                         info="Nearest valid height will be used."
                                     )
                                 resolution_text = gr.Markdown(value="<div style='text-align:right; padding:5px 15px 5px 5px;'>Selected bucket for resolution: 640 x 640</div>", label="", show_label=False)
+                                num_generations = gr.Number(
+                                    label="Generations per queue submission",
+                                    value=settings.get("num_generations", 1),
+                                    precision=0,
+                                    minimum=1,
+                                    maximum=100,
+                                    info="How many jobs each 'Add to Queue' enqueues. Above 1, the extra jobs reuse every input but get a fresh random seed, so you get that many variations of the same idea."
+                                )
 
                         # --- START OF REFACTORED XY PLOT SECTION ---
                         xy_plot_components = create_xy_plot_ui(
@@ -1024,14 +1032,6 @@ def create_interface(
                             value=settings.get("clean_up_videos", True),
                             info="If checked, only the final video will be kept after generation."
                         )
-                        num_generations = gr.Number(
-                            label="Generations per queue submission",
-                            value=settings.get("num_generations", 1),
-                            precision=0,
-                            minimum=1,
-                            maximum=100,
-                            info="How many jobs each 'Add to Queue' enqueues. Above 1, the extra jobs reuse every input but get a fresh random seed, so you get that many variations of the same idea."
-                        )
                         intermediate_video_interval = gr.Slider(
                             label="Intermediate video interval (sections)",
                             minimum=0,
@@ -1440,6 +1440,7 @@ def create_interface(
              resolutionW_arg, resolutionH_arg,
              combine_with_source_arg, 
              num_cleaned_frames_arg,
+             num_generations_arg,
              lora_names_states_arg,   # This is from lora_names_states (gr.State)
              *lora_slider_values_tuple # Remaining args are LoRA slider values
             ) = args
@@ -1488,11 +1489,12 @@ def create_interface(
 
             result = queue_one_job(seed_arg)
 
-            # The num_generations setting queues repeats of this job, identical apart
+            # The num_generations value queues repeats of this job, identical apart
             # from a fresh random seed each, so one submission yields several takes on
-            # the same idea. The first job keeps the seed shown in the UI.
+            # the same idea. The first job keeps the seed shown in the UI. It arrives
+            # with the rest of the UI inputs, so edits take effect on the next submit.
             try:
-                num_generations_setting = int(settings.get("num_generations", 1))
+                num_generations_setting = int(num_generations_arg)
             except (TypeError, ValueError):
                 num_generations_setting = 1
             num_generations_setting = max(1, num_generations_setting)
@@ -1610,6 +1612,7 @@ def create_interface(
             resolutionH,                # Corresponds to resolutionH_arg
             combine_with_source,        # Corresponds to combine_with_source_arg
             num_cleaned_frames,         # Corresponds to num_cleaned_frames_arg
+            num_generations,            # Corresponds to num_generations_arg
             lora_names_states           # Corresponds to lora_names_states_arg
         ]
         # Add LoRA sliders to the input list
